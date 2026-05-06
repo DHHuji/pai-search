@@ -1441,8 +1441,12 @@ with mid:
     # ── Search mode toggle ────────────────────────────────────────────────────
     search_mode = st.radio(
         "search_mode",
-        options=['transcription', 'document'],
-        format_func=lambda x: '🔍  Search transcriptions' if x == 'transcription' else '📄  Find document by name / ID',
+        options=['transcription', 'document', 'feature'],
+        format_func=lambda x: {
+            'transcription': '🔍  Search transcriptions',
+            'document':      '📄  Find document by name / ID',
+            'feature':       '🏷️  Browse by feature',
+        }[x],
         horizontal=True,
         label_visibility="collapsed",
         key="search_mode",
@@ -1474,6 +1478,30 @@ with mid:
                       st.session_state.get('_last_pattern', '')
     if search_clicked:
         st.session_state['_last_pattern'] = pattern_input
+
+    # ── Feature browser UI (shown only in feature mode) ──────────────────────
+    if search_mode == 'feature':
+        _feat_names = [fd[2] for fd in FEATURE_DEFS]
+        _sel_feat   = st.selectbox(
+            "Feature", _feat_names, key="feat_browse_name",
+            label_visibility="collapsed",
+        )
+        _feat_def = next(fd for fd in FEATURE_DEFS if fd[2] == _sel_feat)
+        if _feat_def[3] == 'bool':
+            _feat_val_sel = True   # always show True (tagged) docs
+        else:
+            _feat_val_sel = st.selectbox(
+                "Value", _feat_def[4] or [], key="feat_browse_val",
+                label_visibility="collapsed",
+            )
+        _feat_search_btn = st.button("🏷️  Find tagged documents", type="primary", key="feat_browse_btn")
+        if _feat_search_btn:
+            st.session_state['_feat_search'] = (_sel_feat, _feat_def, _feat_val_sel)
+            st.session_state['_search_results'] = []   # clear transcription results
+        search_clicked = False  # disable normal search path
+        pattern_input  = ''
+    else:
+        st.session_state.pop('_feat_search', None)
 
     with st.expander("⚙️  Advanced options"):
         if search_mode == 'transcription':
@@ -1605,6 +1633,29 @@ if results:
         </div>
         """, unsafe_allow_html=True)
 
+    # ── Download search results as CSV ────────────────────────────────────────
+    import csv, io as _io
+    _csv_buf = _io.StringIO()
+    _csv_w   = csv.writer(_csv_buf)
+    _csv_w.writerow(['Document', 'Link', 'Matches', 'Matched words'])
+    _seen_dl = set()
+    for _r in results:
+        if _r['doc_id'] in _seen_dl:
+            continue
+        _seen_dl.add(_r['doc_id'])
+        _words = ', '.join(list(dict.fromkeys(
+            _STRIP_MARK.sub('', w) for w in _r.get('matched_words', [])
+        )))
+        _link = f"https://docs.google.com/document/d/{_r['doc_id']}/edit"
+        _csv_w.writerow([_r['name'], _link, _r['match_count'], _words])
+    st.download_button(
+        label="⬇ Download results (CSV)",
+        data=_csv_buf.getvalue().encode('utf-8-sig'),
+        file_name=f"pai_search_{pattern_shown}.csv",
+        mime='text/csv',
+        key='dl_search_results',
+    )
+
     # Map doc_id → all sheet rows (handles recordings split across multiple rows)
     doc_id_to_rows: dict = {}
     for doc in corpus:
@@ -1669,3 +1720,77 @@ if results:
                 f"[Open in Google Docs ↗](https://docs.google.com/document/d/{r['doc_id']}/edit)",
                 unsafe_allow_html=False,
             )
+
+# ── Feature browser results ───────────────────────────────────────────────────
+if st.session_state.get('_feat_search') and corpus:
+    _fs_name, _fs_def, _fs_val = st.session_state['_feat_search']
+    _fs_col   = _fs_def[1]   # column letter (e.g. 'M')
+    _fs_type  = _fs_def[3]
+
+    st.markdown(f"""
+    <div class="stats-bar">
+      <span>🏷️ <b>{_fs_name}</b></span>
+      <span>value: <b>{_fs_val if _fs_type != 'bool' else '✓ tagged'}</b></span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.spinner("Reading feature values from spreadsheet…"):
+        _feat_rows = []   # (doc_name, doc_id, sheet_row, village, community, cur_val)
+        _seen_fids = set()
+        for _doc in corpus:
+            if _doc['doc_id'] in _seen_fids:
+                continue
+            _seen_fids.add(_doc['doc_id'])
+            try:
+                _fvals = get_sheet_features(_doc['sheet_row'])
+                _cur   = _fvals.get(_fs_col)
+                _match = (
+                    (bool(_cur) is True) if _fs_type == 'bool'
+                    else str(_cur or '').strip() == str(_fs_val).strip()
+                )
+                if _match:
+                    _feat_rows.append({
+                        'name':      _doc['name'],
+                        'doc_id':    _doc['doc_id'],
+                        'sheet_row': _doc['sheet_row'],
+                        'village':   _doc.get('village', ''),
+                        'community': _doc.get('community', ''),
+                        'value':     _cur,
+                    })
+            except Exception:
+                continue
+
+    if not _feat_rows:
+        st.info(f"No documents tagged with **{_fs_name}** = {_fs_val}.")
+    else:
+        st.caption(f"{len(_feat_rows)} document(s) found")
+
+        # ── Download feature results ──────────────────────────────────────────
+        import csv as _csv_mod, io as _io2
+        _fbuf = _io2.StringIO()
+        _fw   = _csv_mod.writer(_fbuf)
+        _fw.writerow(['Feature', 'Value', 'Document', 'Village', 'Community', 'Link'])
+        for _fr in _feat_rows:
+            _fw.writerow([
+                _fs_name,
+                _fr['value'],
+                _fr['name'],
+                _fr['village'],
+                _fr['community'],
+                f"https://docs.google.com/document/d/{_fr['doc_id']}/edit",
+            ])
+        st.download_button(
+            label="⬇ Download feature results (CSV)",
+            data=_fbuf.getvalue().encode('utf-8-sig'),
+            file_name=f"pai_feature_{_fs_name.replace(' ','_')}.csv",
+            mime='text/csv',
+            key='dl_feat_results',
+        )
+
+        # ── Display each tagged document ──────────────────────────────────────
+        for _fr in _feat_rows:
+            _meta = ' · '.join(filter(None, [_fr['village'], _fr['community']]))
+            with st.expander(f"📄  {_fr['name']}   ·   {_meta}"):
+                st.markdown(
+                    f"[Open in Google Docs ↗](https://docs.google.com/document/d/{_fr['doc_id']}/edit)"
+                )
