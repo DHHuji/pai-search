@@ -1103,20 +1103,34 @@ def _build_features_block(sheet_vals: dict, doc_only_vals: dict) -> str:
     return '\n'.join(lines)
 
 
-def update_gdoc_features_section(doc_id: str, sheet_vals: dict, doc_only_vals: dict):
+def update_gdoc_features_section(
+    doc_id: str,
+    sheet_vals: dict,
+    doc_only_vals: dict,
+    example_words: dict | None = None,   # {col_letter: "word"} newly tagged words
+):
     """
-    Replace (or append) the FEATURES section in the Google Doc.
-    Uses the Docs API batchUpdate with deleteContentRange + insertText.
+    Update the FEATURES section in the Google Doc.
+
+    Two modes:
+    • FEATURES section EXISTS → replace the full block (preserving example words
+      already in the doc, merging in any newly tagged example_words).
+    • FEATURES section MISSING → insert ONLY the lines for features that have
+      a real value, each with its example word if provided.
     """
     _, docs_svc, _ = get_services()
     doc = docs_svc.documents().get(documentId=doc_id).execute()
     body_content = doc.get('body', {}).get('content', [])
+    example_words = example_words or {}
 
     all_feature_names = {fd[2] for fd in FEATURE_DEFS} | set(DOC_ONLY_FEATURES)
 
-    feat_start = None   # startIndex of "FEATURES:" paragraph
-    feat_end   = None   # startIndex of paragraph AFTER the features block
+    feat_start  = None
+    feat_end    = None
+    # Parse existing example words already written in the doc (format: "name  [val]  word1, word2")
+    existing_examples: dict[str, str] = {}   # col_letter → existing example string
 
+    para_texts = []
     for elem in body_content:
         if 'paragraph' not in elem:
             continue
@@ -1124,21 +1138,56 @@ def update_gdoc_features_section(doc_id: str, sheet_vals: dict, doc_only_vals: d
             e.get('textRun', {}).get('content', '')
             for e in elem['paragraph'].get('elements', [])
         ).strip()
+        para_texts.append((elem['startIndex'], text))
 
+    in_features = False
+    for start_idx, text in para_texts:
         if text == 'FEATURES:':
-            feat_start = elem['startIndex']
+            feat_start = start_idx
+            in_features = True
             continue
-
-        if feat_start is not None:
-            # End the block when we hit an empty line or something outside the feature list
+        if in_features:
             if text and not any(text.startswith(fn) for fn in all_feature_names):
-                feat_end = elem['startIndex']
+                feat_end = start_idx
                 break
+            # Try to parse existing example from line like "name  [val]  example"
+            for fd in FEATURE_DEFS:
+                if text.startswith(fd[2] + '  ['):
+                    # Extract anything after the closing bracket
+                    bracket_close = text.find(']')
+                    if bracket_close >= 0 and bracket_close + 2 < len(text):
+                        existing_examples[fd[1]] = text[bracket_close + 2:].strip()
+                    break
 
-    new_block = _build_features_block(sheet_vals, doc_only_vals)
+    # Merge: new example_words take precedence, but append to existing ones
+    merged_examples: dict[str, str] = dict(existing_examples)
+    for col_l, word in example_words.items():
+        if word:
+            existing = merged_examples.get(col_l, '')
+            words_list = [w.strip() for w in existing.split(',') if w.strip()]
+            if word not in words_list:
+                words_list.append(word)
+            merged_examples[col_l] = ', '.join(words_list)
 
     if feat_start is None:
-        # No FEATURES section — append at the end of the document
+        # ── No FEATURES section: insert only the lines with actual values ──────
+        lines = ['FEATURES:']
+        for fd in FEATURE_DEFS:
+            col_l, name, ftype = fd[1], fd[2], fd[3]
+            val = sheet_vals.get(col_l)
+            has_val = bool(val) if ftype == 'bool' else bool(val and str(val).strip())
+            if not has_val:
+                continue
+            val_str = '+' if ftype == 'bool' else str(val)
+            ex = merged_examples.get(col_l, '')
+            lines.append(f'{name}  [{val_str}]  {ex}'.rstrip())
+        for name in DOC_ONLY_FEATURES:
+            val = doc_only_vals.get(name)
+            if not val:
+                continue
+            val_str = '+' if val is True else str(val)
+            lines.append(f'{name}  [{val_str}]')
+        new_block = '\n'.join(lines)
         end_idx = body_content[-1]['endIndex'] - 1
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
@@ -1148,8 +1197,24 @@ def update_gdoc_features_section(doc_id: str, sheet_vals: dict, doc_only_vals: d
             }}]},
         ).execute()
     else:
+        # ── FEATURES section exists: replace with full updated block ───────────
+        lines = ['FEATURES:']
+        for fd in FEATURE_DEFS:
+            col_l, name, ftype = fd[1], fd[2], fd[3]
+            val = sheet_vals.get(col_l)
+            val_str = ('+' if val else '') if ftype == 'bool' else (str(val) if val else '')
+            ex = merged_examples.get(col_l, '')
+            lines.append(f'{name}  [{val_str}]  {ex}'.rstrip())
+        for name in DOC_ONLY_FEATURES:
+            val = doc_only_vals.get(name)
+            if isinstance(val, bool):
+                lines.append(f'{name}  [{"+" if val else ""}]')
+            elif val:
+                lines.append(f'{name}  [{val}]')
+            else:
+                lines.append(f'{name}  []')
+        new_block = '\n'.join(lines)
         end_idx = feat_end if feat_end else body_content[-1]['endIndex'] - 1
-        # Delete old block, then insert new one at same position
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
             body={'requests': [
@@ -1163,7 +1228,7 @@ def update_gdoc_features_section(doc_id: str, sheet_vals: dict, doc_only_vals: d
             ]},
         ).execute()
 
-    get_doc_content.clear()   # force re-fetch of the display HTML
+    get_doc_content.clear()
 
 
 def find_replace_in_gdoc(doc_id: str, find_text: str, replace_text: str) -> int:
@@ -1364,6 +1429,7 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
         if st.button("✕ Clear", key=f"{sk}_clear_bar", use_container_width=True):
             st.session_state[f"{sk}_pending"] = {}
             st.session_state[f"{sk}_doc_only"] = {}
+            st.session_state[f"{sk}_pending_words"] = {}
             for _dn in DOC_ONLY_FEATURES:
                 st.session_state.pop(f"{sk}_donly_{_dn}", None)
             st.rerun()
@@ -1416,7 +1482,8 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 # Update Google Doc FEATURES section
                 try:
                     merged_sheet = {**current, **pending}
-                    update_gdoc_features_section(doc_id, merged_sheet, doc_only)
+                    pending_words = st.session_state.get(f"{sk}_pending_words", {})
+                    update_gdoc_features_section(doc_id, merged_sheet, doc_only, pending_words)
                 except Exception as e:
                     st.error(f"Google Doc update failed: {e}")
                     st.session_state[f"{sk}_confirm"] = False
@@ -1424,6 +1491,7 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
 
                 st.session_state[f"{sk}_pending"] = {}
                 st.session_state[f"{sk}_doc_only"] = {}
+                st.session_state[f"{sk}_pending_words"] = {}
                 st.session_state[f"{sk}_confirm"] = False
                 st.success(f"✅  Features saved for **{doc_name}**!")
                 st.rerun()
@@ -1585,7 +1653,13 @@ if _bridge_tag:
                 sk = f"feat_{doc_id}"
                 if f"{sk}_pending" not in st.session_state:
                     st.session_state[f"{sk}_pending"] = {}
+                if f"{sk}_pending_words" not in st.session_state:
+                    st.session_state[f"{sk}_pending_words"] = {}
                 st.session_state[f"{sk}_pending"][fd[1]] = feat_val
+                # Store the clicked word (selText) alongside the feature
+                sel_text = _bridge_tag.get('selText', '').strip()
+                if sel_text:
+                    st.session_state[f"{sk}_pending_words"][fd[1]] = sel_text
                 st.session_state[f"{sk}_auto_expand"] = True
                 st.session_state['_last_bridge_ts'] = _bt_ts
 
