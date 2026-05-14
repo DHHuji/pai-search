@@ -213,6 +213,9 @@ CONSONANTS: set = {
 }
 VOWELS: set = { 'a','e','i','u','o','ā','ō','ū','ī','ē','ɑ̄','ə' }
 DIPHTHONGS: list = ['aw','ay','ōw','ēy']
+
+GUTTURALS: set  = {'h','x','ḥ','ʿ','ġ','q'}          # G wildcard
+EMPHATICS: set  = {'ḍ','ḏ̣','ẓ','ṣ'}                  # E wildcard
 WORD_DELIM = re.compile(r'[\s,.:;!?()\[\]{}"\'—–#]+|ʿ\u203Fʿ')
 
 
@@ -222,6 +225,8 @@ def _alts(items) -> str:
 _C = _alts(CONSONANTS)
 _V = _alts(VOWELS)
 _D = _alts(DIPHTHONGS)
+_G = _alts(GUTTURALS)
+_E = _alts(EMPHATICS)
 
 
 def pattern_to_regex(pattern: str) -> re.Pattern:
@@ -243,6 +248,8 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
         if   ch == 'C': parts.append(_C)
         elif ch == 'V': parts.append(_V)
         elif ch == 'D': parts.append(_D)
+        elif ch == 'G': parts.append(_G)
+        elif ch == 'E': parts.append(_E)
         elif ch == '$': parts.append('.')
         else:           parts.append(re.escape(ch))
 
@@ -1535,6 +1542,8 @@ with mid:
           <span class="legend-pill"><b>C</b> = consonant</span>
           <span class="legend-pill"><b>V</b> = vowel</span>
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
+          <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
+          <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
           <span class="legend-pill"><b>$</b> = any character</span>
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
