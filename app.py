@@ -929,7 +929,7 @@ def _extract_doc_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_corpus_index() -> list[dict]:
     """
     Reads the Recordings sheet and returns a list of dicts, one per transcribed doc:
@@ -955,7 +955,19 @@ def load_corpus_index() -> list[dict]:
 
         def cell_link(idx, _cells=cells):
             if idx >= len(_cells): return None
-            return _cells[idx].get('hyperlink')
+            cell = _cells[idx]
+            # 1. Proper hyperlink (inserted via Insert > Link)
+            if cell.get('hyperlink'):
+                return cell['hyperlink']
+            # 2. Plain-text URL pasted directly into the cell
+            val = (
+                (cell.get('userEnteredValue') or {}).get('stringValue')
+                or cell.get('formattedValue')
+                or ''
+            )
+            if 'docs.google.com' in val or val.startswith('https://'):
+                return val.strip()
+            return None
 
         trans_name = cell_val(COL_TRANS_LINK)
         trans_url  = cell_link(COL_TRANS_LINK)
