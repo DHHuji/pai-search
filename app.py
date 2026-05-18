@@ -929,7 +929,7 @@ def _extract_doc_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def load_corpus_index() -> list[dict]:
     """
     Reads the Recordings sheet and returns a list of dicts, one per transcribed doc:
