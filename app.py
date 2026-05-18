@@ -927,8 +927,8 @@ def _extract_doc_id(url: str) -> str | None:
     """Extract Google Doc ID from various Google URL formats."""
     if not url:
         return None
-    # Standard: docs.google.com/document/d/ID
-    m = re.search(r'/document/d/([a-zA-Z0-9_-]+)', url)
+    # Standard: /document/d/ID  OR  /document/u/0/d/ID  (Google sometimes inserts /u/N/)
+    m = re.search(r'/document/(?:u/\d+/)?d/([a-zA-Z0-9_-]+)', url)
     if m:
         return m.group(1)
     # Drive open: drive.google.com/open?id=ID
