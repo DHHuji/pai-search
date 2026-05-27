@@ -1700,18 +1700,40 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
         ]
         if _tagged_feats:
             with st.expander(f"🗑️  Remove existing tags  ({len(_tagged_feats)} tagged)"):
+                _pending_del = st.session_state.get(f"{sk}_pending_delete")
                 for _fd, _val in _tagged_feats:
                     _c1, _c2 = st.columns([5, 1])
                     _val_str = '✓' if _fd[3] == 'bool' else str(_val)
                     _c1.markdown(f"`{_fd[2]}` = **{_val_str}**")
-                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Delete {_fd[2]}"):
-                        with st.spinner(f"Deleting {_fd[2]}…"):
-                            try:
-                                delete_feature_tag(doc_id, sheet_rows, _fd[1])
-                                st.success(f"✅ Deleted **{_fd[2]}**")
+                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Remove {_fd[2]}"):
+                        st.session_state[f"{sk}_pending_delete"] = _fd[1]
+                        st.rerun()
+
+                # Confirmation step — shown after clicking 🗑️
+                if _pending_del:
+                    _del_fd = next((f for f in FEATURE_DEFS if f[1] == _pending_del), None)
+                    if _del_fd:
+                        _del_val = _existing.get(_pending_del)
+                        _del_val_str = '✓' if _del_fd[3] == 'bool' else str(_del_val)
+                        st.warning(
+                            f"Delete **{_del_fd[2]}** = `{_del_val_str}`? "
+                            f"This will clear the value from the spreadsheet and remove the line from the Google Doc."
+                        )
+                        _yes_col, _no_col = st.columns(2)
+                        with _yes_col:
+                            if st.button("✅ Yes, delete", key=f"{sk}_del_confirm", type="primary"):
+                                with st.spinner(f"Deleting {_del_fd[2]}…"):
+                                    try:
+                                        delete_feature_tag(doc_id, sheet_rows, _pending_del)
+                                        st.session_state.pop(f"{sk}_pending_delete", None)
+                                        st.success(f"✅ Deleted **{_del_fd[2]}**")
+                                        st.rerun()
+                                    except Exception as _de:
+                                        st.error(f"Delete failed: {_de}")
+                        with _no_col:
+                            if st.button("❌ Cancel", key=f"{sk}_del_cancel"):
+                                st.session_state.pop(f"{sk}_pending_delete", None)
                                 st.rerun()
-                            except Exception as _de:
-                                st.error(f"Delete failed: {_de}")
 
     if not has_changes:
         st.caption("Right-click words in the transcript above to tag features.")
