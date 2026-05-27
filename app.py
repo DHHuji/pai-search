@@ -366,7 +366,7 @@ def highlight_in_exported_html(html_doc: str, rx: re.Pattern) -> str:
 _STRIP_MARK = re.compile(r'</?mark[^>]*>')
 
 
-def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None) -> str:
+def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None, tagged_words: list = None) -> str:
     """
     Inject right-click context menu and edit-mode support into a Google Docs
     HTML export before it is rendered in the iframe.
@@ -378,7 +378,8 @@ def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None) ->
         for fd in FEATURE_DEFS
     ])
 
-    nav_words_js = json.dumps(nav_words or [])
+    nav_words_js    = json.dumps(nav_words or [])
+    tagged_words_js = json.dumps(list(dict.fromkeys(tagged_words or [])))  # deduplicated
 
     script = f"""
 <style>
@@ -400,6 +401,11 @@ def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None) ->
 #pai-mark-pos {{ font-size:11px; color:#999; margin-left:auto; }}
 mark {{ background:#b6f2c8; border-radius:2px; padding:0 1px; }}
 mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2; }}
+/* ── Auto-tagged word highlight ── */
+.pai-tagged-word {{
+  background: #ffd97d; border-radius:2px; padding:0 2px;
+  outline: 1.5px solid #f5a623; cursor:default;
+}}
 /* ── Context menu ── */
 #pai-ctx-menu {{
   position:fixed; z-index:999999; min-width:250px; max-width:310px;
@@ -660,9 +666,26 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     if (e.key === 'Escape') {{ menu.style.display = 'none'; hideSubMenu(); }}
   }});
 
+  // ── Highlight selected text as a tagged word (client-side, immediate) ───
+  function highlightCurrentSelection() {{
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    try {{
+      var range = sel.getRangeAt(0);
+      var span  = document.createElement('span');
+      span.className = 'pai-tagged-word';
+      range.surroundContents(span);
+      sel.removeAllRanges();
+    }} catch(e) {{
+      // Selection may span multiple elements — just clear it
+      sel.removeAllRanges();
+    }}
+  }}
+
   // ── Store tag in localStorage → bridge component picks it up ───────────
   function storeTag(featureName, value) {{
-    // Instant visual feedback before Streamlit reruns (which takes a few seconds)
+    highlightCurrentSelection();   // immediate visual feedback in document
+    // Also flash the menu header green for 700ms
     header.textContent = '✓  ' + featureName;
     header.style.color = '#4ade80';
     hideSubMenu();
@@ -699,6 +722,56 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   }}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', insertStrip);
   else insertStrip();
+}})();
+
+// ── Highlight already-pending tagged words on page load ────────────────────
+(function() {{
+  var TAGGED = {tagged_words_js};
+  if (!TAGGED || !TAGGED.length) return;
+
+  function wrapWordInNode(node, word) {{
+    var text = node.nodeValue;
+    var idx  = text.indexOf(word);
+    if (idx === -1) return null;
+    var before = text.slice(0, idx);
+    var after  = text.slice(idx + word.length);
+    var span = document.createElement('span');
+    span.className = 'pai-tagged-word';
+    span.textContent = word;
+    var frag = document.createDocumentFragment();
+    if (before) frag.appendChild(document.createTextNode(before));
+    frag.appendChild(span);
+    var rest = document.createTextNode(after);
+    frag.appendChild(rest);
+    node.parentNode.replaceChild(frag, node);
+    return rest;   // continue scanning from remaining text
+  }}
+
+  function highlightWord(word) {{
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {{
+      acceptNode: function(n) {{
+        // Skip script/style and already-highlighted spans
+        var p = n.parentNode;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        var tag = p.tagName && p.tagName.toLowerCase();
+        if (tag === 'script' || tag === 'style') return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains('pai-tagged-word')) return NodeFilter.FILTER_REJECT;
+        return n.nodeValue.includes(word) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      }}
+    }}, false);
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(function(n) {{
+      var rest = n;
+      while (rest && rest.nodeValue && rest.nodeValue.includes(word)) {{
+        rest = wrapWordInNode(rest, word);
+      }}
+    }});
+  }}
+
+  function run() {{ TAGGED.forEach(highlightWord); }}
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
 }})();
 
 var _paiWordIdx = {{}}, _paiLastHL = null, _paiLastBtn = null;
@@ -1249,8 +1322,8 @@ def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
     # 2. Rewrite Google Doc FEATURES section with updated (cleared) values
     if doc_id and sheet_rows:
         try:
-            updated_vals = get_sheet_features(sheet_rows[0])
-            update_gdoc_features_section(doc_id, updated_vals, {})
+            # Pass None for the deleted col → tells the function to remove that line
+            update_gdoc_features_section(doc_id, {col_letter: None})
         except Exception:
             pass   # doc update failure is non-critical; spreadsheet already cleared
 
@@ -1280,32 +1353,30 @@ def _build_features_block(sheet_vals: dict, doc_only_vals: dict) -> str:
 
 def update_gdoc_features_section(
     doc_id: str,
-    sheet_vals: dict,
-    doc_only_vals: dict,
+    pending_vals: dict,       # {col_letter: value | None}  — newly tagged features
     example_words: dict | None = None,   # {col_letter: "word"} newly tagged words
 ):
     """
-    Update the FEATURES section in the Google Doc.
+    Update the FEATURES section in the Google Doc — surgical update only.
 
-    Two modes:
-    • FEATURES section EXISTS → replace the full block (preserving example words
-      already in the doc, merging in any newly tagged example_words).
-    • FEATURES section MISSING → insert ONLY the lines for features that have
-      a real value, each with its example word if provided.
+    • Only modifies lines for features in pending_vals.
+    • All other existing feature lines are preserved as-is.
+    • If pending_vals[col] is None/empty → remove that feature's line.
+    • If FEATURES section doesn't exist → create it with only the pending lines.
     """
     _, docs_svc, _ = get_services()
     doc = docs_svc.documents().get(documentId=doc_id).execute()
     body_content = doc.get('body', {}).get('content', [])
     example_words = example_words or {}
 
-    all_feature_names = {fd[2] for fd in FEATURE_DEFS} | set(DOC_ONLY_FEATURES)
+    all_known_names = {fd[2] for fd in FEATURE_DEFS} | set(DOC_ONLY_FEATURES)
 
-    feat_start  = None
-    feat_end    = None
-    # Parse existing example words already written in the doc (format: "name  [val]  word1, word2")
-    existing_examples: dict[str, str] = {}   # col_letter → existing example string
+    # ── Parse the doc: find FEATURES section + extract existing lines ──────────
+    feat_start = feat_end = None
+    existing_lines: dict[str, str] = {}   # feature_name → "full line text"
+    existing_examples: dict[str, str] = {}  # col_letter → "word1, word2"
 
-    para_texts = []
+    para_texts: list[tuple[int, str]] = []
     for elem in body_content:
         if 'paragraph' not in elem:
             continue
@@ -1322,47 +1393,66 @@ def update_gdoc_features_section(
             in_features = True
             continue
         if in_features:
-            if text and not any(text.startswith(fn) for fn in all_feature_names):
+            # End condition: non-empty text that isn't a known feature line
+            if text and not any(text.startswith(fn) for fn in all_known_names):
                 feat_end = start_idx
                 break
-            # Try to parse existing example from line like "name  [val]  example"
+            # Parse each feature line
             for fd in FEATURE_DEFS:
                 if text.startswith(fd[2] + '  ['):
-                    # Extract anything after the closing bracket
-                    bracket_close = text.find(']')
-                    if bracket_close >= 0 and bracket_close + 2 < len(text):
-                        existing_examples[fd[1]] = text[bracket_close + 2:].strip()
+                    existing_lines[fd[2]] = text
+                    bc = text.find(']')
+                    if bc >= 0 and bc + 2 < len(text):
+                        existing_examples[fd[1]] = text[bc + 2:].strip()
                     break
 
-    # Merge: new example_words take precedence, but append to existing ones
-    merged_examples: dict[str, str] = dict(existing_examples)
-    for col_l, word in example_words.items():
-        if word:
-            existing = merged_examples.get(col_l, '')
-            words_list = [w.strip() for w in existing.split(',') if w.strip()]
-            if word not in words_list:
-                words_list.append(word)
-            merged_examples[col_l] = ', '.join(words_list)
+    # ── Build updated set of lines ─────────────────────────────────────────────
+    # Start with all existing lines, then apply pending changes
+    updated_lines: dict[str, str] = dict(existing_lines)
 
+    for col_l, new_val in pending_vals.items():
+        fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
+        if not fd:
+            continue
+        name = fd[2]
+
+        # Deletion: empty value removes the line
+        if not new_val and new_val is not True:
+            updated_lines.pop(name, None)
+            continue
+
+        val_str = '+' if fd[3] == 'bool' else str(new_val)
+
+        # Merge example words: keep existing ones, append new if not duplicate
+        ex_existing = existing_examples.get(col_l, '')
+        ex_new = (example_words.get(col_l) or '').strip()
+        if ex_new:
+            words_list = [w.strip() for w in ex_existing.split(',') if w.strip()]
+            if ex_new not in words_list:
+                words_list.append(ex_new)
+            ex_merged = ', '.join(words_list)
+        else:
+            ex_merged = ex_existing
+
+        line = f'{name}  [{val_str}]'
+        if ex_merged:
+            line += f'  {ex_merged}'
+        updated_lines[name] = line
+
+    # ── Reconstruct the FEATURES block in FEATURE_DEFS order ──────────────────
+    lines = ['FEATURES:']
+    for fd in FEATURE_DEFS:
+        if fd[2] in updated_lines:
+            lines.append(updated_lines[fd[2]])
+    # Preserve any lines not in FEATURE_DEFS (e.g. doc-only features already there)
+    fd_names = {fd[2] for fd in FEATURE_DEFS}
+    for name, line in existing_lines.items():
+        if name not in fd_names and name in updated_lines:
+            lines.append(updated_lines[name])
+    new_block = '\n'.join(lines)
+
+    # ── Write to Google Doc ────────────────────────────────────────────────────
     if feat_start is None:
-        # ── No FEATURES section: insert only the lines with actual values ──────
-        lines = ['FEATURES:']
-        for fd in FEATURE_DEFS:
-            col_l, name, ftype = fd[1], fd[2], fd[3]
-            val = sheet_vals.get(col_l)
-            has_val = bool(val) if ftype == 'bool' else bool(val and str(val).strip())
-            if not has_val:
-                continue
-            val_str = '+' if ftype == 'bool' else str(val)
-            ex = merged_examples.get(col_l, '')
-            lines.append(f'{name}  [{val_str}]  {ex}'.rstrip())
-        for name in DOC_ONLY_FEATURES:
-            val = doc_only_vals.get(name)
-            if not val:
-                continue
-            val_str = '+' if val is True else str(val)
-            lines.append(f'{name}  [{val_str}]')
-        new_block = '\n'.join(lines)
         end_idx = body_content[-1]['endIndex'] - 1
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
@@ -1372,23 +1462,6 @@ def update_gdoc_features_section(
             }}]},
         ).execute()
     else:
-        # ── FEATURES section exists: replace with full updated block ───────────
-        lines = ['FEATURES:']
-        for fd in FEATURE_DEFS:
-            col_l, name, ftype = fd[1], fd[2], fd[3]
-            val = sheet_vals.get(col_l)
-            val_str = ('+' if val else '') if ftype == 'bool' else (str(val) if val else '')
-            ex = merged_examples.get(col_l, '')
-            lines.append(f'{name}  [{val_str}]  {ex}'.rstrip())
-        for name in DOC_ONLY_FEATURES:
-            val = doc_only_vals.get(name)
-            if isinstance(val, bool):
-                lines.append(f'{name}  [{"+" if val else ""}]')
-            elif val:
-                lines.append(f'{name}  [{val}]')
-            else:
-                lines.append(f'{name}  []')
-        new_block = '\n'.join(lines)
         end_idx = feat_end if feat_end else body_content[-1]['endIndex'] - 1
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
@@ -1616,36 +1689,50 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                     st.session_state[f"{sk}_confirm"] = False
                     return
 
-                conflicts = []
-                if pending:
-                    try:
-                        conflicts = write_sheet_features(sheet_rows[0], pending)
-                    except Exception as e:
-                        st.error(f"Spreadsheet write failed: {e}")
-                        st.session_state[f"{sk}_confirm"] = False
-                        return
+                # Separate features by: conflict / same-value duplicate / genuinely new
+                conflicts  = []
+                to_write   = {}   # features with new values → write to spreadsheet
+                for col_l, new_val in (pending or {}).items():
+                    cur_val = current.get(col_l)
+                    cell_empty = cur_val in (None, False, '', 0)
+                    if not cell_empty and cur_val != new_val:
+                        fd_tmp = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
+                        name_tmp = fd_tmp[2] if fd_tmp else col_l
+                        conflicts.append(
+                            f"**{name_tmp}**: spreadsheet has `{cur_val}`, you tagged `{new_val}`"
+                        )
+                    elif cell_empty:
+                        to_write[col_l] = new_val
+                    # else: same value already in sheet → skip spreadsheet write,
+                    #       but still update example word in Google Doc below
 
                 if conflicts:
                     st.error(
-                        "⚠️  Existing values differ from your tags — **not written**:\n\n"
+                        "⚠️  Existing values differ — **not written**:\n\n"
                         + "\n".join(f"- {c}" for c in conflicts)
                     )
                     st.session_state[f"{sk}_confirm"] = False
                     return
 
-                # Write to remaining rows (split recordings)
-                if pending and len(sheet_rows) > 1:
+                # Write genuinely new values to spreadsheet
+                if to_write:
+                    try:
+                        write_sheet_features(sheet_rows[0], to_write)
+                    except Exception as e:
+                        st.error(f"Spreadsheet write failed: {e}")
+                        st.session_state[f"{sk}_confirm"] = False
+                        return
+                    # Write to remaining rows (split recordings)
                     for extra_row in sheet_rows[1:]:
                         try:
-                            write_sheet_features(extra_row, pending)
+                            write_sheet_features(extra_row, to_write)
                         except Exception as e:
                             st.error(f"Row {extra_row} write failed: {e}")
 
-                # Update Google Doc FEATURES section
+                # Update Google Doc: only the pending features (NOT the full table)
                 try:
-                    merged_sheet = {**current, **pending}
                     pending_words = st.session_state.get(f"{sk}_pending_words", {})
-                    update_gdoc_features_section(doc_id, merged_sheet, doc_only, pending_words)
+                    update_gdoc_features_section(doc_id, pending, pending_words)
                 except Exception as e:
                     st.error(f"Google Doc update failed: {e}")
                     st.session_state[f"{sk}_confirm"] = False
@@ -2070,7 +2157,10 @@ if results:
             )) if r['matched_words'] else []
 
             # Document viewer — with right-click context menu + chip nav injected
-            interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words)
+            # Pass any already-staged tagged words so they appear highlighted on load
+            _sk_words = f"feat_{r['doc_id']}_pending_words"
+            _tagged   = list(st.session_state.get(_sk_words, {}).values())
+            interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
             _b64 = base64.b64encode(interactive_html.encode('utf-8')).decode('ascii')
             st.iframe(
                 src=f"data:text/html;charset=utf-8;base64,{_b64}",
