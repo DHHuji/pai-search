@@ -8,7 +8,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import re
 import io
-import base64
 import html as html_lib
 import unicodedata
 import json
@@ -2185,11 +2184,10 @@ if results:
             _sk_words = f"feat_{r['doc_id']}_pending_words"
             _tagged   = list(st.session_state.get(_sk_words, {}).values())
             interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
-            _b64 = base64.b64encode(interactive_html.encode('utf-8')).decode('ascii')
-            st.iframe(
-                src=f"data:text/html;charset=utf-8;base64,{_b64}",
-                height=580,
-            )
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                components.html(interactive_html, height=580)
 
             # ── Submit bar (feature tags staged via right-click) ────────────
             all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
