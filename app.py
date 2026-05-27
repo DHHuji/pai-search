@@ -1662,6 +1662,33 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     doc_only = st.session_state[f"{sk}_doc_only"]
 
     has_changes = bool(pending)
+
+    # ── Delete existing tags (always shown when there are tagged features) ──
+    if sheet_rows:
+        try:
+            _existing = get_sheet_features(sheet_rows[0])
+        except Exception:
+            _existing = {}
+        _tagged_feats = [
+            (fd, _existing.get(fd[1]))
+            for fd in FEATURE_DEFS
+            if _existing.get(fd[1]) not in (None, False, '', 0)
+        ]
+        if _tagged_feats:
+            with st.expander(f"🗑️  Remove existing tags  ({len(_tagged_feats)} tagged)"):
+                for _fd, _val in _tagged_feats:
+                    _c1, _c2 = st.columns([5, 1])
+                    _val_str = '✓' if _fd[3] == 'bool' else str(_val)
+                    _c1.markdown(f"`{_fd[2]}` = **{_val_str}**")
+                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Delete {_fd[2]}"):
+                        with st.spinner(f"Deleting {_fd[2]}…"):
+                            try:
+                                delete_feature_tag(doc_id, sheet_rows, _fd[1])
+                                st.success(f"✅ Deleted **{_fd[2]}**")
+                                st.rerun()
+                            except Exception as _de:
+                                st.error(f"Delete failed: {_de}")
+
     if not has_changes:
         st.caption("Right-click words in the transcript above to tag features.")
         return
@@ -1772,31 +1799,6 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 st.session_state[f"{sk}_confirm"] = False
                 st.rerun()
 
-    # ── Delete existing tags ────────────────────────────────────────────────
-    if sheet_rows:
-        try:
-            _existing = get_sheet_features(sheet_rows[0])
-        except Exception:
-            _existing = {}
-        _tagged_feats = [
-            (fd, _existing.get(fd[1]))
-            for fd in FEATURE_DEFS
-            if _existing.get(fd[1]) not in (None, False, '', 0)
-        ]
-        if _tagged_feats:
-            with st.expander(f"🗑️  Remove existing tags  ({len(_tagged_feats)} tagged)"):
-                for _fd, _val in _tagged_feats:
-                    _c1, _c2 = st.columns([5, 1])
-                    _val_str = '✓' if _fd[3] == 'bool' else str(_val)
-                    _c1.markdown(f"`{_fd[2]}` = **{_val_str}**")
-                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Delete {_fd[2]}"):
-                        with st.spinner(f"Deleting {_fd[2]}…"):
-                            try:
-                                delete_feature_tag(doc_id, sheet_rows, _fd[1])
-                                st.success(f"✅ Deleted **{_fd[2]}**")
-                                st.rerun()
-                            except Exception as _de:
-                                st.error(f"Delete failed: {_de}")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
