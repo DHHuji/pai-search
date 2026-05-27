@@ -728,6 +728,26 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   var TAGGED = {tagged_words_js};
   if (!TAGGED || !TAGGED.length) return;
 
+  // Find the FEATURES: heading so we can exclude it and everything after
+  var featuresStart = null;
+  function findFeaturesSection() {{
+    var all = document.body.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {{
+      var el = all[i];
+      if (el.children.length === 0 && el.textContent.trim() === 'FEATURES:') {{
+        featuresStart = el;
+        break;
+      }}
+    }}
+  }}
+
+  function isInOrAfterFeatures(node) {{
+    if (!featuresStart) return false;
+    if (featuresStart.contains(node)) return true;
+    // DOCUMENT_POSITION_FOLLOWING means node comes after featuresStart
+    return !!(featuresStart.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }}
+
   function wrapWordInNode(node, word) {{
     var text = node.nodeValue;
     var idx  = text.indexOf(word);
@@ -740,8 +760,8 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     var frag = document.createDocumentFragment();
     if (before) frag.appendChild(document.createTextNode(before));
     frag.appendChild(span);
-    var rest = document.createTextNode(after);
-    frag.appendChild(rest);
+    var rest = after ? document.createTextNode(after) : null;
+    if (rest) frag.appendChild(rest);
     node.parentNode.replaceChild(frag, node);
     return rest;   // continue scanning from remaining text
   }}
@@ -755,6 +775,8 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
         var tag = p.tagName && p.tagName.toLowerCase();
         if (tag === 'script' || tag === 'style') return NodeFilter.FILTER_REJECT;
         if (p.classList && p.classList.contains('pai-tagged-word')) return NodeFilter.FILTER_REJECT;
+        // Skip anything in or after the FEATURES section
+        if (isInOrAfterFeatures(n)) return NodeFilter.FILTER_REJECT;
         return n.nodeValue.includes(word) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       }}
     }}, false);
@@ -768,7 +790,10 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     }});
   }}
 
-  function run() {{ TAGGED.forEach(highlightWord); }}
+  function run() {{
+    findFeaturesSection();
+    TAGGED.forEach(highlightWord);
+  }}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 }})();
