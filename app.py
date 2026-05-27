@@ -2187,7 +2187,7 @@ if results:
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                components.html(interactive_html, height=580)
+                components.html(interactive_html, height=580, scrolling=True)
 
             # ── Submit bar (feature tags staged via right-click) ────────────
             all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
