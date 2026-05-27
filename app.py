@@ -1528,33 +1528,17 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     pending  = st.session_state[f"{sk}_pending"]
     doc_only = st.session_state[f"{sk}_doc_only"]
 
-    # ── Doc-only feature checkboxes (not in spreadsheet) ───────────────────
-    st.markdown(
-        "<span style='font-size:12px;color:#60aee8;letter-spacing:.07em;"
-        "text-transform:uppercase'>Document-only features</span>",
-        unsafe_allow_html=True,
-    )
-    donly_cols = st.columns(3)
-    for i, name in enumerate(DOC_ONLY_FEATURES):
-        with donly_cols[i % 3]:
-            doc_only[name] = st.checkbox(
-                name, value=bool(doc_only.get(name)), key=f"{sk}_donly_{name}"
-            )
-
-    has_changes = bool(pending) or any(doc_only.values())
+    has_changes = bool(pending)
     if not has_changes:
         st.caption("Right-click words in the transcript above to tag features.")
         return
 
     # ── Summary of staged tags ─────────────────────────────────────────────
-    n = len(pending) + sum(1 for v in doc_only.values() if v)
+    n = len(pending)
     tag_summaries = []
     for col_l, val in pending.items():
         fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
         tag_summaries.append(f"`{fd[2] if fd else col_l}` = **{val}**")
-    for name, val in doc_only.items():
-        if val:
-            tag_summaries.append(f"`{name}` = **✓**")
 
     st.markdown(
         f"🏷️ **{n} feature(s) staged:** " + "  ·  ".join(tag_summaries)
@@ -1572,8 +1556,6 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
             st.session_state[f"{sk}_pending"] = {}
             st.session_state[f"{sk}_doc_only"] = {}
             st.session_state[f"{sk}_pending_words"] = {}
-            for _dn in DOC_ONLY_FEATURES:
-                st.session_state.pop(f"{sk}_donly_{_dn}", None)
             st.rerun()
 
     if st.session_state.get(f"{sk}_confirm"):
