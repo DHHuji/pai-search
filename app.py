@@ -1397,13 +1397,31 @@ def update_gdoc_features_section(
             if text and not any(text.startswith(fn) for fn in all_known_names):
                 feat_end = start_idx
                 break
-            # Parse each feature line
+            # Parse each feature line.
+            # Format written by this code (new): "name  [word1; word2]   val_str"
+            # Format found in older docs (old):  "name  [val_str]  word1, word2"
+            # Detection: content between [] is "words" if it contains non-ASCII
+            # characters (Arabic transcription) or is absent from the feature's
+            # known option list; otherwise it's treated as a value (old format).
             for fd in FEATURE_DEFS:
                 if text.startswith(fd[2] + '  ['):
                     existing_lines[fd[2]] = text
-                    bc = text.find(']')
-                    if bc >= 0 and bc + 2 < len(text):
-                        existing_examples[fd[1]] = text[bc + 2:].strip()
+                    bo = text.find('[')
+                    bc = text.find(']', bo)
+                    if bo >= 0 and bc >= 0:
+                        inside = text[bo + 1:bc].strip()
+                        after  = text[bc + 1:].strip()
+                        # Determine format: if inside looks like a feature value, old format
+                        known_vals = set(fd[4] or []) | {'+', '', 'TRUE', 'FALSE', 'True', 'False'}
+                        is_old = (inside in known_vals or
+                                  (not any(ord(c) > 127 for c in inside) and inside == inside.upper()
+                                   and not inside.replace(' ', '').isalpha()))
+                        if is_old:
+                            # Old format: words are after the bracket
+                            existing_examples[fd[1]] = after
+                        else:
+                            # New format: words are inside the bracket
+                            existing_examples[fd[1]] = inside
                     break
 
     # ── Build updated set of lines ─────────────────────────────────────────────
@@ -1423,20 +1441,24 @@ def update_gdoc_features_section(
 
         val_str = '+' if fd[3] == 'bool' else str(new_val)
 
-        # Merge example words: keep existing ones, append new if not duplicate
+        # Merge example words: keep existing ones (from new-format lines),
+        # append new word if not already present.  Separator is semicolon.
         ex_existing = existing_examples.get(col_l, '')
         ex_new = (example_words.get(col_l) or '').strip()
         if ex_new:
-            words_list = [w.strip() for w in ex_existing.split(',') if w.strip()]
+            words_list = [w.strip() for w in ex_existing.split(';') if w.strip()]
             if ex_new not in words_list:
                 words_list.append(ex_new)
-            ex_merged = ', '.join(words_list)
+            ex_merged = '; '.join(words_list)
         else:
             ex_merged = ex_existing
 
-        line = f'{name}  [{val_str}]'
-        if ex_merged:
-            line += f'  {ex_merged}'
+        # New format: name  [word1; word2]   val_str
+        line = f'{name}  [{ex_merged}]'
+        if val_str and val_str not in ('+', ''):
+            line += f'   {val_str}'
+        elif val_str == '+':
+            line += '   +'
         updated_lines[name] = line
 
     # ── Reconstruct the FEATURES block in FEATURE_DEFS order ──────────────────
