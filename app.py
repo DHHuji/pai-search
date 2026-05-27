@@ -1388,7 +1388,7 @@ def update_gdoc_features_section(
 
     in_features = False
     for start_idx, text in para_texts:
-        if text == 'FEATURES:':
+        if text.strip() == 'FEATURES:':
             feat_start = start_idx
             in_features = True
             continue
@@ -1471,7 +1471,7 @@ def update_gdoc_features_section(
     for name, line in existing_lines.items():
         if name not in fd_names and name in updated_lines:
             lines.append(updated_lines[name])
-    new_block = '\n'.join(lines)
+    new_block = '\n'.join(lines) + '\n'
 
     # ── Write to Google Doc ────────────────────────────────────────────────────
     if feat_start is None:
