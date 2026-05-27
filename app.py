@@ -8,6 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import re
 import io
+import base64
 import html as html_lib
 import unicodedata
 import json
@@ -1749,23 +1750,47 @@ with mid:
     # ── Feature browser UI (shown only in feature mode) ──────────────────────
     if search_mode == 'feature':
         _feat_names = [fd[2] for fd in FEATURE_DEFS]
-        _sel_feat   = st.selectbox(
-            "Feature", _feat_names, key="feat_browse_name",
+
+        _sel_feats = st.multiselect(
+            "Features", _feat_names, key="feat_browse_names",
+            placeholder="Choose one or more features…",
             label_visibility="collapsed",
         )
-        _feat_def = next(fd for fd in FEATURE_DEFS if fd[2] == _sel_feat)
-        if _feat_def[3] == 'bool':
-            _feat_val_sel = True   # always show True (tagged) docs
-        else:
-            _feat_val_sel = st.selectbox(
-                "Value", _feat_def[4] or [], key="feat_browse_val",
-                label_visibility="collapsed",
-            )
-        _feat_search_btn = st.button("🏷️  Find tagged documents", type="primary", key="feat_browse_btn")
-        if _feat_search_btn:
-            st.session_state['_feat_search'] = (_sel_feat, _feat_def, _feat_val_sel)
-            st.session_state['_search_results'] = []   # clear transcription results
-        search_clicked = False  # disable normal search path
+
+        _feat_conditions = []   # list of (feat_name, feat_def, value)
+        if _sel_feats:
+            for _sf in _sel_feats:
+                _fd = next(fd for fd in FEATURE_DEFS if fd[2] == _sf)
+                if _fd[3] == 'bool':
+                    _feat_conditions.append((_sf, _fd, True))
+                else:
+                    _v = st.selectbox(
+                        f"Value — {_sf}", _fd[4] or [],
+                        key=f"feat_browse_val_{_sf}",
+                        label_visibility="visible",
+                    )
+                    _feat_conditions.append((_sf, _fd, _v))
+
+            _logic = 'AND'
+            if len(_feat_conditions) > 1:
+                _logic = st.radio(
+                    "Logic", ['AND', 'OR'],
+                    horizontal=True, key="feat_browse_logic",
+                    format_func=lambda x: (
+                        '🔗 AND — must have all features'
+                        if x == 'AND' else
+                        '🔀 OR — must have at least one feature'
+                    ),
+                )
+
+        _feat_search_btn = st.button(
+            "🏷️  Find tagged documents", type="primary", key="feat_browse_btn",
+            disabled=not _feat_conditions,
+        )
+        if _feat_search_btn and _feat_conditions:
+            st.session_state['_feat_search'] = (_feat_conditions, _logic)
+            st.session_state['_search_results'] = []
+        search_clicked = False
         pattern_input  = ''
     else:
         st.session_state.pop('_feat_search', None)
@@ -1983,7 +2008,11 @@ if results:
 
             # Document viewer — with right-click context menu + chip nav injected
             interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words)
-            components.html(interactive_html, height=580, scrolling=True)
+            _b64 = base64.b64encode(interactive_html.encode('utf-8')).decode('ascii')
+            st.iframe(
+                src=f"data:text/html;charset=utf-8;base64,{_b64}",
+                height=580,
+            )
 
             # ── Submit bar (feature tags staged via right-click) ────────────
             all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
@@ -1997,19 +2026,21 @@ if results:
 
 # ── Feature browser results ───────────────────────────────────────────────────
 if st.session_state.get('_feat_search') and corpus:
-    _fs_name, _fs_def, _fs_val = st.session_state['_feat_search']
-    _fs_col   = _fs_def[1]   # column letter (e.g. 'M')
-    _fs_type  = _fs_def[3]
+    _feat_conditions, _logic = st.session_state['_feat_search']
 
+    # Build stats bar label
+    _cond_labels = []
+    for _fn, _fd, _fv in _feat_conditions:
+        _cond_labels.append(f"<b>{_fn}</b> = {'✓' if _fd[3]=='bool' else _fv}")
+    _logic_sep = f"&nbsp; <span style='color:#60aee8'>{_logic}</span> &nbsp;"
     st.markdown(f"""
     <div class="stats-bar">
-      <span>🏷️ <b>{_fs_name}</b></span>
-      <span>value: <b>{_fs_val if _fs_type != 'bool' else '✓ tagged'}</b></span>
+      <span>🏷️ {_logic_sep.join(_cond_labels)}</span>
     </div>
     """, unsafe_allow_html=True)
 
     with st.spinner("Reading feature values from spreadsheet…"):
-        _feat_rows = []   # (doc_name, doc_id, sheet_row, village, community, cur_val)
+        _feat_rows = []
         _seen_fids = set()
         for _doc in corpus:
             if _doc['doc_id'] in _seen_fids:
@@ -2017,25 +2048,35 @@ if st.session_state.get('_feat_search') and corpus:
             _seen_fids.add(_doc['doc_id'])
             try:
                 _fvals = get_sheet_features(_doc['sheet_row'])
-                _cur   = _fvals.get(_fs_col)
-                _match = (
-                    (bool(_cur) is True) if _fs_type == 'bool'
-                    else str(_cur or '').strip() == str(_fs_val).strip()
-                )
-                if _match:
-                    _feat_rows.append({
-                        'name':      _doc['name'],
-                        'doc_id':    _doc['doc_id'],
-                        'sheet_row': _doc['sheet_row'],
-                        'village':   _doc.get('village', ''),
-                        'community': _doc.get('community', ''),
-                        'value':     _cur,
-                    })
             except Exception:
                 continue
 
+            # Evaluate each condition against this document
+            _cond_results = []
+            _matched_vals = {}
+            for _fn, _fd, _fv in _feat_conditions:
+                _cur = _fvals.get(_fd[1])
+                _hit = (
+                    bool(_cur) is True if _fd[3] == 'bool'
+                    else str(_cur or '').strip() == str(_fv).strip()
+                )
+                _cond_results.append(_hit)
+                _matched_vals[_fn] = _cur
+
+            _include = all(_cond_results) if _logic == 'AND' else any(_cond_results)
+            if _include:
+                _feat_rows.append({
+                    'name':        _doc['name'],
+                    'doc_id':      _doc['doc_id'],
+                    'sheet_row':   _doc['sheet_row'],
+                    'village':     _doc.get('village', ''),
+                    'community':   _doc.get('community', ''),
+                    'values':      _matched_vals,
+                })
+
     if not _feat_rows:
-        st.info(f"No documents tagged with **{_fs_name}** = {_fs_val}.")
+        _desc = f" {_logic} ".join(f"{n}={'✓' if d[3]=='bool' else v}" for n,d,v in _feat_conditions)
+        st.info(f"No documents found matching: {_desc}")
     else:
         st.caption(f"{len(_feat_rows)} document(s) found")
 
@@ -2043,20 +2084,17 @@ if st.session_state.get('_feat_search') and corpus:
         import csv as _csv_mod, io as _io2
         _fbuf = _io2.StringIO()
         _fw   = _csv_mod.writer(_fbuf)
-        _fw.writerow(['Feature', 'Value', 'Document', 'Village', 'Community', 'Link'])
+        _feat_col_names = [fn for fn, _, _ in _feat_conditions]
+        _fw.writerow(['Document', 'Village', 'Community', 'Link'] + _feat_col_names)
         for _fr in _feat_rows:
             _fw.writerow([
-                _fs_name,
-                _fr['value'],
-                _fr['name'],
-                _fr['village'],
-                _fr['community'],
+                _fr['name'], _fr['village'], _fr['community'],
                 f"https://docs.google.com/document/d/{_fr['doc_id']}/edit",
-            ])
+            ] + [_fr['values'].get(fn, '') for fn in _feat_col_names])
         st.download_button(
             label="⬇ Download feature results (CSV)",
             data=_fbuf.getvalue().encode('utf-8-sig'),
-            file_name=f"pai_feature_{_fs_name.replace(' ','_')}.csv",
+            file_name="pai_feature_results.csv",
             mime='text/csv',
             key='dl_feat_results',
         )
@@ -2064,7 +2102,11 @@ if st.session_state.get('_feat_search') and corpus:
         # ── Display each tagged document ──────────────────────────────────────
         for _fr in _feat_rows:
             _meta = ' · '.join(filter(None, [_fr['village'], _fr['community']]))
-            with st.expander(f"📄  {_fr['name']}   ·   {_meta}"):
+            _vals_str = '  ·  '.join(
+                f"{fn} = {'✓' if v is True else v}"
+                for fn, v in _fr['values'].items() if v
+            )
+            with st.expander(f"📄  {_fr['name']}   ·   {_meta}   |  {_vals_str}  |" if _vals_str else f"📄  {_fr['name']}   ·   {_meta}"):
                 st.markdown(
                     f"[Open in Google Docs ↗](https://docs.google.com/document/d/{_fr['doc_id']}/edit)"
                 )
