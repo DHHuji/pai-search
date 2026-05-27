@@ -662,7 +662,11 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
 
   // ── Store tag in localStorage → bridge component picks it up ───────────
   function storeTag(featureName, value) {{
-    menu.style.display = 'none';
+    // Instant visual feedback before Streamlit reruns (which takes a few seconds)
+    header.textContent = '✓  ' + featureName;
+    header.style.color = '#4ade80';
+    hideSubMenu();
+    setTimeout(function() {{ menu.style.display = 'none'; header.style.color = ''; }}, 700);
     try {{
       localStorage.setItem('pai_pending_tag', JSON.stringify({{
         feature:   featureName,
@@ -1222,6 +1226,35 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
     return []
 
 
+def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
+    """
+    Delete a single feature tag:
+      1. Clears the spreadsheet cell(s) for this doc's row(s).
+      2. Rewrites the Google Doc FEATURES section with the cleared value.
+    """
+    _, _, sheets_svc = get_services()
+
+    # 1. Clear the cell in every sheet row that belongs to this doc
+    data = [
+        {'range': f"Recordings!{col_letter}{row}", 'values': [['']]}
+        for row in (sheet_rows or [])
+    ]
+    if data:
+        sheets_svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'valueInputOption': 'RAW', 'data': data},
+        ).execute()
+        get_sheet_features.clear()
+
+    # 2. Rewrite Google Doc FEATURES section with updated (cleared) values
+    if doc_id and sheet_rows:
+        try:
+            updated_vals = get_sheet_features(sheet_rows[0])
+            update_gdoc_features_section(doc_id, updated_vals, {})
+        except Exception:
+            pass   # doc update failure is non-critical; spreadsheet already cleared
+
+
 def _build_features_block(sheet_vals: dict, doc_only_vals: dict) -> str:
     """Build the FEATURES text block to write into the Google Doc."""
     lines = ['FEATURES:']
@@ -1370,7 +1403,11 @@ def update_gdoc_features_section(
             ]},
         ).execute()
 
-    get_doc_content.clear()
+    # NOTE: intentionally NOT clearing get_doc_content cache here.
+    # The transcript text doesn't change when features are tagged (only the FEATURES
+    # section at the end changes). Clearing the full cache causes intermittent failures
+    # when the Drive API re-fetch is slow or rate-limited, making the doc disappear.
+    # Users can click "Open in Google Docs" to see the freshly written FEATURES block.
 
 
 def find_replace_in_gdoc(doc_id: str, find_text: str, replace_text: str) -> int:
@@ -1625,6 +1662,32 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
             if st.button("❌  Cancel", key=f"{sk}_no"):
                 st.session_state[f"{sk}_confirm"] = False
                 st.rerun()
+
+    # ── Delete existing tags ────────────────────────────────────────────────
+    if sheet_rows:
+        try:
+            _existing = get_sheet_features(sheet_rows[0])
+        except Exception:
+            _existing = {}
+        _tagged_feats = [
+            (fd, _existing.get(fd[1]))
+            for fd in FEATURE_DEFS
+            if _existing.get(fd[1]) not in (None, False, '', 0)
+        ]
+        if _tagged_feats:
+            with st.expander(f"🗑️  Remove existing tags  ({len(_tagged_feats)} tagged)"):
+                for _fd, _val in _tagged_feats:
+                    _c1, _c2 = st.columns([5, 1])
+                    _val_str = '✓' if _fd[3] == 'bool' else str(_val)
+                    _c1.markdown(f"`{_fd[2]}` = **{_val_str}**")
+                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Delete {_fd[2]}"):
+                        with st.spinner(f"Deleting {_fd[2]}…"):
+                            try:
+                                delete_feature_tag(doc_id, sheet_rows, _fd[1])
+                                st.success(f"✅ Deleted **{_fd[2]}**")
+                                st.rerun()
+                            except Exception as _de:
+                                st.error(f"Delete failed: {_de}")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
