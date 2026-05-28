@@ -1498,14 +1498,27 @@ def update_gdoc_features_section(
     new_block = '\n'.join(lines) + '\n'
 
     # ── Write to Google Doc ────────────────────────────────────────────────────
+    block_len = len(new_block)
     if feat_start is None:
-        end_idx = body_content[-1]['endIndex'] - 1
+        insert_at = body_content[-1]['endIndex'] - 1
+        full_text  = '\n\n' + new_block
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
-            body={'requests': [{'insertText': {
-                'location': {'index': end_idx},
-                'text': '\n\n' + new_block,
-            }}]},
+            body={'requests': [
+                {'insertText': {
+                    'location': {'index': insert_at},
+                    'text': full_text,
+                }},
+                # Clear any inherited background color on the inserted block
+                {'updateTextStyle': {
+                    'range': {
+                        'startIndex': insert_at,
+                        'endIndex':   insert_at + len(full_text),
+                    },
+                    'textStyle': {'backgroundColor': {}},
+                    'fields': 'backgroundColor',
+                }},
+            ]},
         ).execute()
     else:
         end_idx = feat_end if feat_end else body_content[-1]['endIndex'] - 1
@@ -1518,6 +1531,15 @@ def update_gdoc_features_section(
                 {'insertText': {
                     'location': {'index': feat_start},
                     'text': new_block,
+                }},
+                # Clear any inherited background color on the inserted block
+                {'updateTextStyle': {
+                    'range': {
+                        'startIndex': feat_start,
+                        'endIndex':   feat_start + block_len,
+                    },
+                    'textStyle': {'backgroundColor': {}},
+                    'fields': 'backgroundColor',
                 }},
             ]},
         ).execute()
@@ -1832,6 +1854,16 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                     st.error(f"Google Doc update failed: {e}")
                     st.session_state[f"{sk}_confirm"] = False
                     return
+
+                # Persist tagged words into a doc-level store that survives submit,
+                # so they stay highlighted in the transcript after the page reruns.
+                saved_words = st.session_state.get(f"{sk}_saved_words", {})
+                for col_l, word in pending_words.items():
+                    if word:
+                        saved_words.setdefault(col_l, [])
+                        if word not in saved_words[col_l]:
+                            saved_words[col_l].append(word)
+                st.session_state[f"{sk}_saved_words"] = saved_words
 
                 st.session_state[f"{sk}_pending"] = {}
                 st.session_state[f"{sk}_doc_only"] = {}
@@ -2227,9 +2259,16 @@ if results:
             )) if r['matched_words'] else []
 
             # Document viewer — with right-click context menu + chip nav injected
-            # Pass any already-staged tagged words so they appear highlighted on load
-            _sk_words = f"feat_{r['doc_id']}_pending_words"
-            _tagged   = list(st.session_state.get(_sk_words, {}).values())
+            # Combine pending words (staged but not yet submitted) with saved words
+            # (already submitted) so highlights survive across reruns and submits.
+            _sk = f"feat_{r['doc_id']}"
+            _pending_words = st.session_state.get(f"{_sk}_pending_words", {})
+            _saved_words   = st.session_state.get(f"{_sk}_saved_words", {})
+            _tagged = list(dict.fromkeys(
+                w for words in list(_pending_words.values()) + list(_saved_words.values())
+                for w in (words if isinstance(words, list) else [words])
+                if w
+            ))
             interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
             import warnings
             with warnings.catch_warnings():
