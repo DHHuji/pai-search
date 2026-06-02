@@ -1244,7 +1244,7 @@ def debug_corpus_load(tail: int = 20) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_doc_content(doc_id: str) -> dict:
+def get_doc_content(doc_id: str, version: int = 0) -> dict:
     """
     Fetches a Google Doc via the Drive API HTML export.
       - display_html: full Google Docs HTML — rendered pixel-perfect in the viewer
@@ -1598,7 +1598,10 @@ def find_replace_in_gdoc(doc_id: str, find_text: str, replace_text: str) -> int:
            .get('occurrencesChanged', 0)
     )
     if count:
-        get_doc_content.clear()
+        # Bump the per-doc version so only this document's cache entry is invalidated,
+        # not every other document in the search results.
+        _dv = st.session_state.setdefault('_doc_versions', {})
+        _dv[doc_id] = _dv.get(doc_id, 0) + 1
     return count
 
 
@@ -1642,7 +1645,8 @@ def run_search(
 
     for i, doc in enumerate(corpus):
         bar.progress((i + 1) / max(len(corpus), 1), text=f"Searching · {doc['name']}")
-        content      = get_doc_content(doc['doc_id'])
+        _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
+        content      = get_doc_content(doc['doc_id'], version=_doc_ver)
         search_text  = content['italic_text']
 
         match_count   = 0
@@ -1699,7 +1703,8 @@ def search_by_name(query: str, corpus: list[dict]) -> list[dict]:
     for i, doc in enumerate(matches):
         bar.progress((i + 1) / max(len(matches), 1), text=f"Loading · {doc['name']}")
         try:
-            content = get_doc_content(doc['doc_id'])
+            _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
+            content = get_doc_content(doc['doc_id'], version=_doc_ver)
         except Exception:
             continue
         results.append({
@@ -2034,8 +2039,13 @@ with mid:
         key="searchbar",
         initial_value=st.session_state.get('_last_pattern', ''),
     )
-    search_clicked  = _sb_result is not None and bool(_sb_result.get('query'))
-    pattern_input   = _sb_result['query'].strip() if search_clicked else \
+    _sb_ts          = (_sb_result.get('timestamp', 0) if _sb_result else 0)
+    _last_search_ts = st.session_state.get('_last_search_ts', 0)
+    search_clicked  = (_sb_result is not None and bool(_sb_result.get('query'))
+                       and _sb_ts != _last_search_ts)
+    if search_clicked:
+        st.session_state['_last_search_ts'] = _sb_ts
+    pattern_input   = _sb_result['query'].strip() if (_sb_result and _sb_result.get('query')) else \
                       st.session_state.get('_last_pattern', '')
     if search_clicked:
         st.session_state['_last_pattern'] = pattern_input
@@ -2216,6 +2226,8 @@ if search_clicked and pattern_input.strip() and corpus:
                 st.warning(f'No documents found matching "{pattern_input.strip()}".')
         else:
             results = run_search(pattern_input.strip(), position, name_filter, corpus, active_filters)
+            if not results:
+                st.warning(f'No results found for **{pattern_input.strip()}**. Try a broader pattern or different filters.')
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
@@ -2299,7 +2311,9 @@ if results:
             continue          # skip duplicate doc_ids (same Google Doc listed twice in sheet)
         seen_doc_ids.add(r['doc_id'])
 
-        meta  = ' · '.join(filter(None, [r['village'], r['community'], r['gender']]))
+        meta  = ' · '.join(filter(None, [
+            r.get('village', ''), r.get('community', ''), r.get('gender', '')
+        ]))
 
         # Build preview words list (unique, strip mark tags)
         preview_words = list(dict.fromkeys(
@@ -2319,42 +2333,80 @@ if results:
         else:
             words_str = ''
 
-        label = (
-            f"📄  {r['name']}   ·   {r['match_count']} match{'es' if r['match_count'] != 1 else ''}"
-            f"{status_str}{words_str}"
-        )
+        # For filter-browse results (no full-text search), omit match count from label
+        _has_content = bool(r.get('display_html'))
+        if _has_content:
+            label = (
+                f"📄  {r['name']}   ·   {r['match_count']} match{'es' if r['match_count'] != 1 else ''}"
+                f"{status_str}{words_str}"
+            )
+        else:
+            label = f"📄  {r['name']}{status_str}"
+            if meta:
+                label += f"   ·   {meta}"
 
         with st.expander(label):
-            st.markdown(f"""
-            <div class="doc-card-meta">
-              <span class="badge-green">✦ {r['match_count']} matches</span>
-              <span class="badge">{r['word_count']} words</span>
-              <span style="color:#8899aa">{meta}</span>
-            </div>
-            """, unsafe_allow_html=True)
+            if _has_content:
+                st.markdown(f"""
+                <div class="doc-card-meta">
+                  <span class="badge-green">✦ {r['match_count']} matches</span>
+                  <span class="badge">{r.get('word_count', '?')} words</span>
+                  <span style="color:#8899aa">{meta}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="doc-card-meta">
+                  <span style="color:#8899aa">{meta}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-            # Word chips are now rendered as a sticky nav strip INSIDE the iframe.
-            # Strip <mark> tags to get plain word text for the chip buttons.
-            nav_words = list(dict.fromkeys(
-                _STRIP_MARK.sub('', w) for w in r['matched_words']
-            )) if r['matched_words'] else []
+            if _has_content:
+                # Word chips are now rendered as a sticky nav strip INSIDE the iframe.
+                nav_words = list(dict.fromkeys(
+                    _STRIP_MARK.sub('', w) for w in r['matched_words']
+                )) if r.get('matched_words') else []
 
-            # Document viewer — with right-click context menu + chip nav injected
-            # Combine pending words (staged but not yet submitted) with saved words
-            # (already submitted) so highlights survive across reruns and submits.
-            _sk = f"feat_{r['doc_id']}"
-            _pending_words = st.session_state.get(f"{_sk}_pending_words", {})
-            _saved_words   = st.session_state.get(f"{_sk}_saved_words", {})
-            _tagged = list(dict.fromkeys(
-                w for words in list(_pending_words.values()) + list(_saved_words.values())
-                for w in (words if isinstance(words, list) else [words])
-                if w
-            ))
-            interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                components.html(interactive_html, height=580, scrolling=True)
+                # Document viewer — with right-click context menu + chip nav injected
+                _sk = f"feat_{r['doc_id']}"
+                _pending_words = st.session_state.get(f"{_sk}_pending_words", {})
+                _saved_words   = st.session_state.get(f"{_sk}_saved_words", {})
+                _tagged = list(dict.fromkeys(
+                    w for words in list(_pending_words.values()) + list(_saved_words.values())
+                    for w in (words if isinstance(words, list) else [words])
+                    if w
+                ))
+                interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    components.html(interactive_html, height=580, scrolling=True)
+            else:
+                # Filter-browse: no content loaded yet — show a load button
+                _load_key = f"_load_doc_{r['doc_id']}"
+                if st.session_state.get(_load_key):
+                    with st.spinner("Loading document…"):
+                        try:
+                            _doc_ver = st.session_state.get('_doc_versions', {}).get(r['doc_id'], 0)
+                            _content = get_doc_content(r['doc_id'], version=_doc_ver)
+                            _sk = f"feat_{r['doc_id']}"
+                            _pw = st.session_state.get(f"{_sk}_pending_words", {})
+                            _sw = st.session_state.get(f"{_sk}_saved_words", {})
+                            _tagged = list(dict.fromkeys(
+                                w for words in list(_pw.values()) + list(_sw.values())
+                                for w in (words if isinstance(words, list) else [words])
+                                if w
+                            ))
+                            _ihtml = inject_interaction_js(_content['display_html'], r['doc_id'], [], _tagged)
+                            import warnings
+                            with warnings.catch_warnings():
+                                warnings.simplefilter("ignore")
+                                components.html(_ihtml, height=580, scrolling=True)
+                        except Exception as e:
+                            st.error(f"Could not load document: {e}")
+                else:
+                    st.button("📖 Load document", key=f"btn_load_{r['doc_id']}",
+                              on_click=lambda k=_load_key: st.session_state.update({k: True}))
 
             # ── Submit bar (feature tags staged via right-click) ────────────
             all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])

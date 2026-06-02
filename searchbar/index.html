@@ -181,11 +181,15 @@ inp.addEventListener('keydown', function(e) {
 });
 
 // ── Pre-fill from Streamlit args ──────────────────────────────────────────────
+// Only set inp.value on the very first render — after that the user owns the field.
+// This prevents mid-session reruns (e.g. opening a doc) from resetting typed text.
+var _inputInitialized = false;
 window.addEventListener('message', function(e) {
   if (!e.data || e.data.type !== 'streamlit:render') return;
   var args = (e.data.args || {});
-  if (args.initial_value != null && args.initial_value !== inp.value) {
-    inp.value = args.initial_value;
+  if (!_inputInitialized) {
+    if (args.initial_value != null) inp.value = args.initial_value;
+    _inputInitialized = true;
   }
   setTimeout(sendHeight, 20);
 });
