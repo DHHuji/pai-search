@@ -2252,9 +2252,8 @@ if search_clicked and pattern_input.strip() and corpus:
         st.error(f"Search failed: {e}")
         results = []
         st.session_state['_search_results'] = []
-elif _filters_active and not pattern_input.strip() and corpus and search_mode != 'feature':
-    # Filters active with no text query — show filtered document list
-    # (triggered either by filter change or by clicking Search with empty bar)
+elif search_clicked and _filters_active and not pattern_input.strip() and corpus and search_mode != 'feature':
+    # Search clicked with active filters but no text query — show filtered document list
     _filt_results = [
         {'name': d['name'], 'doc_id': d['doc_id'], 'match_count': 0,
          'village': d.get('village',''), 'community': d.get('community',''),
