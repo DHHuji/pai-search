@@ -1164,6 +1164,15 @@ def debug_corpus_load(tail: int = 20) -> dict:
       - 'tail_raw': raw cell info for the last `tail` rows that had ANY content
     """
     _, _, sheets_svc = get_services()
+    # Discover column positions dynamically (same logic as load_corpus_index)
+    _hdr_result = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID, range='Recordings!1:1',
+    ).execute()
+    _headers    = (_hdr_result.get('values') or [[]])[0]
+    _hdr_map    = {h: i for i, h in enumerate(_headers)}
+    _col_trans  = _hdr_map.get(COL_NAMES['trans_link'])
+    _col_rec    = _hdr_map.get(COL_NAMES['rec_link'])
+
     result = sheets_svc.spreadsheets().get(
         spreadsheetId=SPREADSHEET_ID,
         ranges=['Recordings'],
@@ -1181,11 +1190,11 @@ def debug_corpus_load(tail: int = 20) -> dict:
             continue
 
         def _cv(idx, _c=cells):
-            if idx >= len(_c): return None
+            if idx is None or idx >= len(_c): return None
             return _c[idx].get('formattedValue')
 
         def _cl(idx, _c=cells):
-            if idx >= len(_c): return None
+            if idx is None or idx >= len(_c): return None
             cell = _c[idx]
             if cell.get('hyperlink'):
                 return ('hyperlink', cell['hyperlink'])
@@ -1197,9 +1206,9 @@ def debug_corpus_load(tail: int = 20) -> dict:
                 return ('plaintext', val.strip())
             return ('none', None)
 
-        trans_name = _cv(COL_TRANS_LINK)
-        link_src, trans_url = _cl(COL_TRANS_LINK)
-        rec_name   = _cv(COL_REC_LINK) or ''
+        trans_name = _cv(_col_trans)
+        link_src, trans_url = _cl(_col_trans)
+        rec_name   = _cv(_col_rec) or ''
         row_info   = {
             'sheet_row':  grid_row_idx,
             'trans_name': trans_name,
@@ -1642,41 +1651,49 @@ def run_search(
 
     results  = []
     bar      = st.progress(0.0, text="Loading corpus…")
+    _load_errors = []
 
-    for i, doc in enumerate(corpus):
-        bar.progress((i + 1) / max(len(corpus), 1), text=f"Searching · {doc['name']}")
-        _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
-        content      = get_doc_content(doc['doc_id'], version=_doc_ver)
-        search_text  = content['italic_text']
+    try:
+        for i, doc in enumerate(corpus):
+            bar.progress((i + 1) / max(len(corpus), 1), text=f"Searching · {doc['name']}")
+            try:
+                _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
+                content  = get_doc_content(doc['doc_id'], version=_doc_ver)
+            except Exception as _doc_err:
+                _load_errors.append(f"{doc['name']}: {_doc_err}")
+                continue
 
-        match_count   = 0
-        matched_words = []
+            search_text   = content['italic_text']
+            match_count   = 0
+            matched_words = []
 
-        for word in tokenize(search_text):
-            hits = match_word(word, rx, position)
-            if hits:
-                match_count += len(hits)
-                matched_words.append(highlight_word(word, hits))
+            for word in tokenize(search_text):
+                hits = match_word(word, rx, position)
+                if hits:
+                    match_count += len(hits)
+                    matched_words.append(highlight_word(word, hits))
 
-        if match_count > 0:
-            # Highlight matches in the exported Google Docs HTML (all text nodes)
-            display_html = highlight_in_exported_html(content['display_html'], rx)
+            if match_count > 0:
+                display_html = highlight_in_exported_html(content['display_html'], rx)
+                results.append({
+                    'name':          doc['name'],
+                    'doc_id':        doc['doc_id'],
+                    'sheet_row':     doc.get('sheet_row'),
+                    'village':       doc['village'],
+                    'community':     doc['community'],
+                    'gender':        doc['gender'],
+                    'status':        doc.get('status', ''),
+                    'match_count':   match_count,
+                    'word_count':    len(tokenize(search_text)),
+                    'matched_words': matched_words[:15],
+                    'display_html':  display_html,
+                })
+    finally:
+        bar.empty()   # always clear progress bar even if we crash
 
-            results.append({
-                'name':          doc['name'],
-                'doc_id':        doc['doc_id'],
-                'sheet_row':     doc.get('sheet_row'),
-                'village':       doc['village'],
-                'community':     doc['community'],
-                'gender':        doc['gender'],
-                'status':        doc.get('status', ''),
-                'match_count':   match_count,
-                'word_count':    len(tokenize(search_text)),
-                'matched_words': matched_words[:15],
-                'display_html':  display_html,
-            })
+    if _load_errors:
+        st.warning(f"⚠️  {len(_load_errors)} document(s) could not be loaded and were skipped.")
 
-    bar.empty()
     results.sort(key=lambda r: r['match_count'], reverse=True)
     return results
 
@@ -2235,22 +2252,26 @@ if search_clicked and pattern_input.strip() and corpus:
         st.error(f"Search failed: {e}")
         results = []
         st.session_state['_search_results'] = []
-elif search_clicked and not pattern_input.strip() and not _filters_active:
-    st.warning("Please enter a pattern before searching.")
-elif _filters_active and not search_clicked and corpus and search_mode != 'feature':
-    # Filters changed without a new search query — show the filtered document list
+elif _filters_active and not pattern_input.strip() and corpus and search_mode != 'feature':
+    # Filters active with no text query — show filtered document list
+    # (triggered either by filter change or by clicking Search with empty bar)
     _filt_results = [
         {'name': d['name'], 'doc_id': d['doc_id'], 'match_count': 0,
          'village': d.get('village',''), 'community': d.get('community',''),
          'social_typology': d.get('social_typology',''), 'geo_typology': d.get('geo_typology','')}
         for d in _apply_filters(corpus, active_filters)
     ]
+    if not _filt_results:
+        st.warning("No documents match the selected filters.")
     st.session_state['_search_results'] = _filt_results
     st.session_state['_search_pattern'] = ''
     st.session_state['_search_mode']    = 'document'
+elif search_clicked and not pattern_input.strip() and not _filters_active:
+    st.warning("Please enter a search pattern or select a filter.")
 elif not _filters_active and not search_clicked and not pattern_input.strip():
-    # All filters cleared and no query — wipe any stale filter-browse results
-    if st.session_state.get('_search_pattern') == '':
+    # All filters cleared and no query, no search — wipe stale filter-browse results only
+    # (don't wipe real search results which have a non-empty _search_pattern)
+    if st.session_state.get('_search_pattern', '') == '' and st.session_state.get('_search_results'):
         st.session_state['_search_results'] = []
 
 # Always display stored results (survive rerun after bridge tag)
@@ -2333,9 +2354,10 @@ if results:
         else:
             words_str = ''
 
-        # For filter-browse results (no full-text search), omit match count from label
         _has_content = bool(r.get('display_html'))
-        if _has_content:
+        # Show match count only for real text searches (transcription mode with actual matches)
+        _is_text_search = _has_content and mode_shown == 'transcription' and r.get('match_count', 0) > 0
+        if _is_text_search:
             label = (
                 f"📄  {r['name']}   ·   {r['match_count']} match{'es' if r['match_count'] != 1 else ''}"
                 f"{status_str}{words_str}"
@@ -2347,13 +2369,16 @@ if results:
 
         with st.expander(label):
             if _has_content:
-                st.markdown(f"""
-                <div class="doc-card-meta">
-                  <span class="badge-green">✦ {r['match_count']} matches</span>
-                  <span class="badge">{r.get('word_count', '?')} words</span>
-                  <span style="color:#8899aa">{meta}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                _meta_badges = f'<span style="color:#8899aa">{meta}</span>' if meta else ''
+                if _is_text_search:
+                    _meta_badges = (
+                        f'<span class="badge-green">✦ {r["match_count"]} matches</span>'
+                        f'<span class="badge">{r.get("word_count", "?")} words</span>'
+                        + _meta_badges
+                    )
+                else:
+                    _meta_badges = f'<span class="badge">{r.get("word_count", "?")} words</span>' + _meta_badges
+                st.markdown(f'<div class="doc-card-meta">{_meta_badges}</div>', unsafe_allow_html=True)
             else:
                 st.markdown(f"""
                 <div class="doc-card-meta">
