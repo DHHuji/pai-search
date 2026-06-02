@@ -928,15 +928,18 @@ def extract_transcription_text(html_doc: str) -> str:
 
 SPREADSHEET_ID = "1qzh4OZ_gIjaTs__ENPkP7eROpTl2jjtTyb4GLMRljGw"
 
-# Column indices in the Recordings sheet (0-based after row 0 header)
-COL_REC_LINK   = 39   # קישורים להקלטות  — catalog name + Drive link
-COL_TRANS_LINK = 43   # קישורים לתעתיקים — Google Doc link
-COL_VILLAGE        = 1    # שם יישוב בתעתיק
-COL_SOCIAL_TYPOL   = 4    # Social Typology
-COL_GEO_TYPOL      = 5    # Geographical Typology
-COL_COMMUNITY      = 6    # קהילה
-COL_GENDER         = 8    # מגדר דובר
-COL_STATUS         = 37   # סטטוס — AL
+# Human-readable header names used to locate columns dynamically.
+# If a column is renamed in the sheet, update the string here.
+COL_NAMES = {
+    'trans_link':     'קישורים לתעתיקים',
+    'rec_link':       'קישורים להקלטות',
+    'village':        'שם יישוב בתעתיק',
+    'social_typology':'Social Typology',
+    'geo_typology':   'Geographical Typology',
+    'community':      'קהילה',
+    'gender':         'מגדר דובר',
+    'status':         'סטטוס',
+}
 
 # ── Status badge colours (mirrors Google Sheets conditional formatting) ────────
 STATUS_COLORS: dict[str, tuple[str, str]] = {
@@ -1063,12 +1066,31 @@ def _extract_doc_id(url: str) -> str | None:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def get_column_indices() -> dict:
+    """
+    Reads only the header row of the Recordings sheet and returns a dict
+    mapping each COL_NAMES key to its 0-based column index.
+    If a column header isn't found, its value is None.
+    Cached for 10 minutes — same TTL as the corpus.
+    """
+    _, _, sheets_svc = get_services()
+    result = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range='Recordings!1:1',
+    ).execute()
+    headers = (result.get('values') or [[]])[0]
+    header_map = {h: i for i, h in enumerate(headers)}
+    return {key: header_map.get(name) for key, name in COL_NAMES.items()}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def load_corpus_index() -> list[dict]:
     """
-    Reads the Recordings sheet and returns a list of dicts, one per transcribed doc:
-      { name, doc_id, village, community, gender }
-    Uses the Sheets API with includeGridData=True to access cell hyperlinks.
+    Reads the Recordings sheet and returns a list of dicts, one per transcribed doc.
+    Column positions are discovered dynamically from the header row so the sheet
+    columns can be reordered without breaking the app.
     """
+    cols = get_column_indices()
     _, _, sheets_svc = get_services()
     result = sheets_svc.spreadsheets().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -1083,11 +1105,11 @@ def load_corpus_index() -> list[dict]:
         cells = row.get('values', [])
 
         def cell_val(idx, _cells=cells):
-            if idx >= len(_cells): return None
+            if idx is None or idx >= len(_cells): return None
             return _cells[idx].get('formattedValue')
 
         def cell_link(idx, _cells=cells):
-            if idx >= len(_cells): return None
+            if idx is None or idx >= len(_cells): return None
             cell = _cells[idx]
             # 1. Proper hyperlink (inserted via Insert > Link)
             if cell.get('hyperlink'):
@@ -1102,8 +1124,8 @@ def load_corpus_index() -> list[dict]:
                 return val.strip()
             return None
 
-        trans_name = cell_val(COL_TRANS_LINK)
-        trans_url  = cell_link(COL_TRANS_LINK)
+        trans_name = cell_val(cols['trans_link'])
+        trans_url  = cell_link(cols['trans_link'])
 
         # Only include rows that have a recognisable Google link
         if not trans_url or not any(d in trans_url for d in (
@@ -1115,18 +1137,18 @@ def load_corpus_index() -> list[dict]:
         if not doc_id:
             continue
 
-        rec_name = cell_val(COL_REC_LINK) or ''
+        rec_name = cell_val(cols['rec_link']) or ''
         corpus.append({
-            'name':       trans_name or rec_name or doc_id,
-            'rec_name':   rec_name,   # display text of recording link (AN) — searched separately
-            'doc_id':     doc_id,
-            'village':         cell_val(COL_VILLAGE)      or '',
-            'social_typology': cell_val(COL_SOCIAL_TYPOL)  or '',
-            'geo_typology':    cell_val(COL_GEO_TYPOL)     or '',
-            'community':       cell_val(COL_COMMUNITY)     or '',
-            'gender':          cell_val(COL_GENDER)        or '',
-            'status':     cell_val(COL_STATUS)    or '',
-            'sheet_row':  grid_row_idx,   # 1-based row number in the Recordings sheet
+            'name':            trans_name or rec_name or doc_id,
+            'rec_name':        rec_name,
+            'doc_id':          doc_id,
+            'village':         cell_val(cols['village'])         or '',
+            'social_typology': cell_val(cols['social_typology']) or '',
+            'geo_typology':    cell_val(cols['geo_typology'])    or '',
+            'community':       cell_val(cols['community'])       or '',
+            'gender':          cell_val(cols['gender'])          or '',
+            'status':          cell_val(cols['status'])          or '',
+            'sheet_row':       grid_row_idx,
         })
 
     return corpus
@@ -1894,14 +1916,22 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
 #  SIDEBAR – corpus stats & debug
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ── Load corpus index (cached — fast after first load) ────────────────────────
+with st.spinner("Loading corpus…"):
+    try:
+        corpus = load_corpus_index()
+        st.session_state['_corpus_for_sidebar'] = corpus
+    except Exception as e:
+        st.error(f"Could not load corpus index: {e}")
+        corpus = []
+
 with st.sidebar:
     st.markdown("### 📚 Corpus")
-    # Lazy-load so sidebar doesn't block first render
-    _corp_tmp = st.session_state.get('_corpus_for_sidebar')
-    if _corp_tmp is not None:
-        st.markdown(f"**{len(_corp_tmp)}** documents loaded")
+    if corpus:
+        st.markdown(f"**{len(corpus)}** documents loaded")
 
     if st.button("🔄 Reload corpus cache", key="sidebar_reload"):
+        get_column_indices.clear()
         load_corpus_index.clear()
         get_doc_content.clear()
         st.session_state.pop('_corpus_for_sidebar', None)
@@ -2058,10 +2088,8 @@ with mid:
     else:
         st.session_state.pop('_feat_search', None)
 
-    # Options for filters — use corpus from previous run (cached); empty on very first load
-    _filter_corpus = st.session_state.get('_corpus_for_sidebar') or []
     def _corpus_vals(key):
-        return sorted({d[key] for d in _filter_corpus if d.get(key)})
+        return sorted({d[key] for d in corpus if d.get(key)})
 
     with st.expander("⚙️  Advanced options"):
         if search_mode == 'transcription':
@@ -2124,15 +2152,6 @@ with mid:
         st.cache_data.clear()
         st.rerun()
 
-# ── Load corpus index once ────────────────────────────────────────────────────
-with st.spinner("Loading corpus index from Google Sheets…"):
-    try:
-        corpus = load_corpus_index()
-        st.session_state['_corpus_for_sidebar'] = corpus
-        st.caption(f"📚 Corpus: {len(corpus)} transcribed documents loaded from Google Sheets")
-    except Exception as e:
-        st.error(f"Could not load corpus index: {e}")
-        corpus = []
 
 # ── Bridge component: listens for right-click tags from document iframes ──────
 _bridge_tag = _TAG_BRIDGE(key="tagbridge")
