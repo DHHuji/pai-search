@@ -931,10 +931,12 @@ SPREADSHEET_ID = "1qzh4OZ_gIjaTs__ENPkP7eROpTl2jjtTyb4GLMRljGw"
 # Column indices in the Recordings sheet (0-based after row 0 header)
 COL_REC_LINK   = 39   # קישורים להקלטות  — catalog name + Drive link
 COL_TRANS_LINK = 43   # קישורים לתעתיקים — Google Doc link
-COL_VILLAGE    = 1    # שם יישוב בתעתיק
-COL_COMMUNITY  = 4    # קהילה
-COL_GENDER     = 8    # מגדר דובר
-COL_STATUS     = 37   # סטטוס — AL
+COL_VILLAGE        = 1    # שם יישוב בתעתיק
+COL_SOCIAL_TYPOL   = 4    # Social Typology
+COL_GEO_TYPOL      = 5    # Geographical Typology
+COL_COMMUNITY      = 6    # קהילה
+COL_GENDER         = 8    # מגדר דובר
+COL_STATUS         = 37   # סטטוס — AL
 
 # ── Status badge colours (mirrors Google Sheets conditional formatting) ────────
 STATUS_COLORS: dict[str, tuple[str, str]] = {
@@ -1118,9 +1120,11 @@ def load_corpus_index() -> list[dict]:
             'name':       trans_name or rec_name or doc_id,
             'rec_name':   rec_name,   # display text of recording link (AN) — searched separately
             'doc_id':     doc_id,
-            'village':    cell_val(COL_VILLAGE)   or '',
-            'community':  cell_val(COL_COMMUNITY) or '',
-            'gender':     cell_val(COL_GENDER)    or '',
+            'village':         cell_val(COL_VILLAGE)      or '',
+            'social_typology': cell_val(COL_SOCIAL_TYPOL)  or '',
+            'geo_typology':    cell_val(COL_GEO_TYPOL)     or '',
+            'community':       cell_val(COL_COMMUNITY)     or '',
+            'gender':          cell_val(COL_GENDER)        or '',
             'status':     cell_val(COL_STATUS)    or '',
             'sheet_row':  grid_row_idx,   # 1-based row number in the Recordings sheet
         })
@@ -1580,11 +1584,21 @@ def find_replace_in_gdoc(doc_id: str, find_text: str, replace_text: str) -> int:
 #  SEARCH
 # ════════════════════════════════════════════════════════════════════════════════
 
+def _apply_filters(corpus: list[dict], active_filters: dict) -> list[dict]:
+    """Filter corpus by the multiselect active_filters dict.
+    Each key maps to a list of allowed values; empty list = no filter on that field."""
+    for field, allowed in active_filters.items():
+        if allowed:
+            corpus = [d for d in corpus if d.get(field, '') in allowed]
+    return corpus
+
+
 def run_search(
     pattern: str,
     position: str,
     name_filter: str,
     corpus: list[dict],
+    active_filters: dict | None = None,
 ) -> list[dict]:
 
     try:
@@ -1593,12 +1607,9 @@ def run_search(
         st.error(f"Invalid pattern: {e}")
         return []
 
-    # Apply name filter
-    if name_filter.strip():
-        nf = name_filter.strip().lower()
-        corpus = [d for d in corpus if nf in d['name'].lower()
-                                    or nf in d['village'].lower()
-                                    or nf in d['community'].lower()]
+    # Apply filters
+    if active_filters:
+        corpus = _apply_filters(corpus, active_filters)
 
     if not corpus:
         st.warning("No documents match the name filter.")
@@ -2047,6 +2058,11 @@ with mid:
     else:
         st.session_state.pop('_feat_search', None)
 
+    # Options for filters — use corpus from previous run (cached); empty on very first load
+    _filter_corpus = st.session_state.get('_corpus_for_sidebar') or []
+    def _corpus_vals(key):
+        return sorted({d[key] for d in _filter_corpus if d.get(key)})
+
     with st.expander("⚙️  Advanced options"):
         if search_mode == 'transcription':
             st.markdown("**Pattern position within word**")
@@ -2062,17 +2078,46 @@ with mid:
                     'end':      '▶  End of word',
                 }[x],
             )
-            st.markdown("**Filter documents by name / village / community**")
-            name_filter = st.text_input(
-                "name_filter",
-                placeholder="e.g.  Br  or  Galilee  or  Christian  (leave blank for all)",
-                label_visibility="collapsed",
-                key="name_filter"
-            )
         else:
             st.info("In document search mode the query is matched literally (no regex) against document names and metadata.", icon="ℹ️")
-            position    = 'anywhere'
-            name_filter = ''
+            position = 'anywhere'
+
+        st.markdown("**Filter documents**")
+        _fc1, _fc2 = st.columns(2)
+        with _fc1:
+            filt_village = st.multiselect(
+                "שם יישוב בתעתיק",
+                options=_corpus_vals('village'),
+                key="filt_village",
+                placeholder="All villages…",
+            )
+            filt_geo = st.multiselect(
+                "Geographical Typology",
+                options=_corpus_vals('geo_typology'),
+                key="filt_geo",
+                placeholder="All geographies…",
+            )
+        with _fc2:
+            filt_social = st.multiselect(
+                "Social Typology",
+                options=_corpus_vals('social_typology'),
+                key="filt_social",
+                placeholder="All social types…",
+            )
+            filt_community = st.multiselect(
+                "קהילה",
+                options=_corpus_vals('community'),
+                key="filt_community",
+                placeholder="All communities…",
+            )
+
+        active_filters = {
+            'village':         filt_village,
+            'social_typology': filt_social,
+            'geo_typology':    filt_geo,
+            'community':       filt_community,
+        }
+        name_filter = ''  # removed; kept as empty string for backward compat
 
     # Clear-cache utility button (small, tucked below advanced options)
     if st.button("↺  Clear cache & reload", help="Force reload corpus from Google Sheets"):
@@ -2145,11 +2190,11 @@ if '_ctx_edit_result' in st.session_state:
 if search_clicked and pattern_input.strip() and corpus:
     try:
         if search_mode == 'document':
-            results = search_by_name(pattern_input.strip(), corpus)
+            results = search_by_name(pattern_input.strip(), _apply_filters(corpus, active_filters))
             if not results:
                 st.warning(f'No documents found matching "{pattern_input.strip()}".')
         else:
-            results = run_search(pattern_input.strip(), position, name_filter, corpus)
+            results = run_search(pattern_input.strip(), position, name_filter, corpus, active_filters)
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
@@ -2303,7 +2348,8 @@ if st.session_state.get('_feat_search') and corpus:
     with st.spinner("Reading feature values from spreadsheet…"):
         _feat_rows = []
         _seen_fids = set()
-        for _doc in corpus:
+        _filtered_corpus = _apply_filters(corpus, active_filters)
+        for _doc in _filtered_corpus:
             if _doc['doc_id'] in _seen_fids:
                 continue
             _seen_fids.add(_doc['doc_id'])
