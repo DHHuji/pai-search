@@ -926,7 +926,7 @@ def extract_transcription_text(html_doc: str) -> str:
 #  GOOGLE SERVICES
 # ════════════════════════════════════════════════════════════════════════════════
 
-SPREADSHEET_ID = "1qzh4OZ_gIjaTs__ENPkP7eROpTl2jjtTyb4GLMRljGw"
+SPREADSHEET_ID = "1Q9g4vlBDzNx3D872hKePtFy-VShD-ocI--kPs44lyJ4"
 
 # Human-readable header names used to locate columns dynamically.
 # If a column is renamed in the sheet, update the string here.
