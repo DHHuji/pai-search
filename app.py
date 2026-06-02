@@ -2206,6 +2206,8 @@ if '_ctx_edit_result' in st.session_state:
         st.info(f'No occurrences of "{_find}" found in this document.')
 
 # ── Results ───────────────────────────────────────────────────────────────────
+_filters_active = any(v for v in active_filters.values() if v)
+
 if search_clicked and pattern_input.strip() and corpus:
     try:
         if search_mode == 'document':
@@ -2221,8 +2223,23 @@ if search_clicked and pattern_input.strip() and corpus:
         st.error(f"Search failed: {e}")
         results = []
         st.session_state['_search_results'] = []
-elif search_clicked and not pattern_input.strip():
+elif search_clicked and not pattern_input.strip() and not _filters_active:
     st.warning("Please enter a pattern before searching.")
+elif _filters_active and not search_clicked and corpus and search_mode != 'feature':
+    # Filters changed without a new search query — show the filtered document list
+    _filt_results = [
+        {'name': d['name'], 'doc_id': d['doc_id'], 'match_count': 0,
+         'village': d.get('village',''), 'community': d.get('community',''),
+         'social_typology': d.get('social_typology',''), 'geo_typology': d.get('geo_typology','')}
+        for d in _apply_filters(corpus, active_filters)
+    ]
+    st.session_state['_search_results'] = _filt_results
+    st.session_state['_search_pattern'] = ''
+    st.session_state['_search_mode']    = 'document'
+elif not _filters_active and not search_clicked and not pattern_input.strip():
+    # All filters cleared and no query — wipe any stale filter-browse results
+    if st.session_state.get('_search_pattern') == '':
+        st.session_state['_search_results'] = []
 
 # Always display stored results (survive rerun after bridge tag)
 results       = st.session_state.get('_search_results', [])
@@ -2232,10 +2249,10 @@ mode_shown    = st.session_state.get('_search_mode', 'transcription')
 if results:
     total = sum(r['match_count'] for r in results)
     if mode_shown == 'document':
-        stats_label = f"📄 {len(results)} document{'s' if len(results) != 1 else ''} matched"
+        _label_left = f"📄 <b>{pattern_shown}</b>" if pattern_shown else "🗂️ <b>Filtered documents</b>"
         st.markdown(f"""
         <div class="stats-bar">
-          <span>📄 <b>{pattern_shown}</b></span>
+          <span>{_label_left}</span>
           <span>{len(results)} document{'s' if len(results) != 1 else ''} found</span>
         </div>
         """, unsafe_allow_html=True)
