@@ -199,6 +199,20 @@ div[data-testid="stExpander"].result-expander > details > summary svg {
 }
 
 #MainMenu, footer { visibility: hidden; }
+
+/* ── Ensure all Streamlit alert boxes always have readable dark text ── */
+div[data-testid="stAlert"],
+div[data-testid="stAlert"] p,
+div[data-testid="stAlert"] span,
+div[data-testid="stAlert"] li,
+div[data-testid="stAlert"] strong,
+div[data-testid="stAlert"] em {
+  color: #1a2b3c !important;
+}
+/* Warning specifically — yellow bg, force dark text */
+div[data-testid="stAlert"][data-baseweb="notification"] {
+  color: #1a2b3c !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2106,7 +2120,11 @@ with mid:
         initial_value=st.session_state.get('_last_pattern', ''),
     )
     _sb_ts          = (_sb_result.get('timestamp', 0) if _sb_result else 0)
-    _last_search_ts = st.session_state.get('_last_search_ts', 0)
+    # On first run of a new session, consume any stale component value so it
+    # doesn't immediately trigger a search.
+    if '_last_search_ts' not in st.session_state:
+        st.session_state['_last_search_ts'] = _sb_ts
+    _last_search_ts = st.session_state['_last_search_ts']
     # search_clicked whenever the user fires the Search button (new timestamp),
     # even with an empty query — allows "clear + filter-only" workflow.
     search_clicked  = (_sb_result is not None and _sb_ts != _last_search_ts and _sb_ts != 0)
@@ -2306,15 +2324,25 @@ if '_ctx_edit_result' in st.session_state:
 # ── Results ───────────────────────────────────────────────────────────────────
 _filters_active = any(v for v in active_filters.values() if v)
 
-# Detect filter changes: if filters changed since the last committed search,
-# clear stale results so the user knows a new Search click is needed.
+# Detect filter changes: only clear filter-browse results (no query) when filters
+# change without a Search click, so the user knows they need to click Search again.
+# Text search results are NOT cleared by filter changes.
 _active_filters_key = str(sorted((k, tuple(v)) for k, v in active_filters.items()))
-_last_filters_key   = st.session_state.get('_last_filters_key', '')
-if not search_clicked and _active_filters_key != _last_filters_key:
-    # Filters changed without a Search click — clear results from previous run
+if '_last_filters_key' not in st.session_state:
+    # First run — initialise so we don't falsely detect a "change"
+    st.session_state['_last_filters_key'] = _active_filters_key
+_last_filters_key = st.session_state['_last_filters_key']
+
+_is_filter_browse_result = (
+    st.session_state.get('_search_pattern', '') == ''
+    and bool(st.session_state.get('_search_results'))
+)
+if (not search_clicked
+        and _active_filters_key != _last_filters_key
+        and _is_filter_browse_result):
+    # Filters changed after a filter-browse — clear stale list so user must re-search
     st.session_state['_search_results'] = []
-    st.session_state['_search_pattern'] = ''
-    # Don't update _last_filters_key here; do it only when search actually runs
+    st.session_state['_last_filters_key'] = _active_filters_key
 
 if search_clicked and pattern_input.strip() and corpus:
     try:
