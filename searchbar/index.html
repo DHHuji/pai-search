@@ -167,7 +167,7 @@ window.addEventListener('resize', sendHeight);
 // ── Search ────────────────────────────────────────────────────────────────────
 function doSearch() {
   var q = inp.value.trim();
-  if (!q) return;
+  // Always fire even when empty so Python can detect "clear + filter-only" intent
   postST({
     type: 'streamlit:setComponentValue',
     value: {query: q, timestamp: Date.now()},

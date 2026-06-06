@@ -303,43 +303,92 @@ def _is_transcription_para(para_html: str) -> bool:
         return False
     return bool(_TURN_MARKER_HL.match(text) or text[:1].isdigit())
 
+def _is_word_anchored(rx: re.Pattern) -> tuple[bool, bool]:
+    """Return (anchor_start, anchor_end) based on the compiled regex pattern."""
+    p = rx.pattern
+    return p.startswith('^'), p.endswith('$')
+
+
 def _highlight_text_nodes(fragment: str, rx: re.Pattern) -> str:
     """
     Highlight regex matches inside text nodes only (not inside HTML tags).
     Unescapes HTML entities and NFC-normalises each text node before matching,
     so characters like š / ī / ḥ are found regardless of how Google Docs
     encoded them in the export (entities, NFD decomposed, etc.).
+
+    When the regex has ^ / $ word anchors, we tokenise the text node into
+    whitespace-delimited words and run match_word() on each one — this
+    matches the same semantics used in run_search() and correctly highlights
+    patterns like ^di or kān# anywhere in the paragraph.
     """
+    anchor_start, anchor_end = _is_word_anchored(rx)
+    word_anchored = anchor_start or anchor_end
+
     parts = re.split(r'(<[^>]+>)', fragment)
     out = []
     for part in parts:
         if part.startswith('<'):
             out.append(part)
+        elif not part:
+            continue
         else:
             # Unescape HTML entities and normalise to NFC before regex search
             text = unicodedata.normalize('NFC', html_lib.unescape(part))
-            result = []
-            last = 0
-            for m in rx.finditer(text):
-                # Non-matched portion: re-escape HTML special chars
-                result.append(html_lib.escape(text[last:m.start()]))
-                # Find the full whitespace-delimited word containing this match,
-                # so each <mark> carries a data-word attribute for chip navigation.
-                w_start = m.start()
-                while w_start > 0 and not text[w_start - 1].isspace():
-                    w_start -= 1
-                w_end = m.end()
-                while w_end < len(text) and not text[w_end].isspace():
-                    w_end += 1
-                containing_word = html_lib.escape(text[w_start:w_end])
-                # Matched portion: wrap in <mark> with data-word
-                result.append(
-                    f'<mark style="{_MARK_STYLE}" data-word="{containing_word}">'
-                    f'{html_lib.escape(m.group())}</mark>'
-                )
-                last = m.end()
-            result.append(html_lib.escape(text[last:]))
-            out.append(''.join(result))
+
+            if word_anchored:
+                # ── Word-by-word matching (honours ^ / $ anchors) ──────────────
+                # Determine position for match_word()
+                if anchor_start and anchor_end:
+                    pos = 'anywhere'   # whole-word match — match_word checks both ends implicitly
+                elif anchor_start:
+                    pos = 'start'
+                else:
+                    pos = 'end'
+
+                # Tokenise preserving the inter-token separators so we can
+                # reconstruct the original text with highlights.
+                tokens  = WORD_DELIM.split(text)
+                seps    = WORD_DELIM.findall(text)
+                # Pad seps list so zip works cleanly
+                while len(seps) < len(tokens):
+                    seps.append('')
+
+                result = []
+                for tok, sep in zip(tokens, seps):
+                    if not tok:
+                        result.append(html_lib.escape(sep))
+                        continue
+                    hits = match_word(tok, rx, pos)
+                    if hits:
+                        result.append(
+                            f'<mark style="{_MARK_STYLE}" data-word="{html_lib.escape(tok)}">'
+                            f'{html_lib.escape(tok)}</mark>'
+                        )
+                    else:
+                        result.append(html_lib.escape(tok))
+                    result.append(html_lib.escape(sep))
+                out.append(''.join(result))
+            else:
+                # ── Free match: run regex over the whole text node ─────────────
+                result = []
+                last = 0
+                for m in rx.finditer(text):
+                    result.append(html_lib.escape(text[last:m.start()]))
+                    # Find the full whitespace-delimited word containing this match
+                    w_start = m.start()
+                    while w_start > 0 and not text[w_start - 1].isspace():
+                        w_start -= 1
+                    w_end = m.end()
+                    while w_end < len(text) and not text[w_end].isspace():
+                        w_end += 1
+                    containing_word = html_lib.escape(text[w_start:w_end])
+                    result.append(
+                        f'<mark style="{_MARK_STYLE}" data-word="{containing_word}">'
+                        f'{html_lib.escape(m.group())}</mark>'
+                    )
+                    last = m.end()
+                result.append(html_lib.escape(text[last:]))
+                out.append(''.join(result))
     return ''.join(out)
 
 def highlight_in_exported_html(html_doc: str, rx: re.Pattern) -> str:
@@ -1065,7 +1114,7 @@ def _extract_doc_id(url: str) -> str | None:
     return None
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_column_indices() -> dict:
     """
     Reads only the header row of the Recordings sheet and returns a dict
@@ -1646,7 +1695,7 @@ def run_search(
         corpus = _apply_filters(corpus, active_filters)
 
     if not corpus:
-        st.warning("No documents match the name filter.")
+        st.info("No documents match the name filter.", icon="🔍")
         return []
 
     results  = []
@@ -2058,14 +2107,17 @@ with mid:
     )
     _sb_ts          = (_sb_result.get('timestamp', 0) if _sb_result else 0)
     _last_search_ts = st.session_state.get('_last_search_ts', 0)
-    search_clicked  = (_sb_result is not None and bool(_sb_result.get('query'))
-                       and _sb_ts != _last_search_ts)
+    # search_clicked whenever the user fires the Search button (new timestamp),
+    # even with an empty query — allows "clear + filter-only" workflow.
+    search_clicked  = (_sb_result is not None and _sb_ts != _last_search_ts and _sb_ts != 0)
     if search_clicked:
         st.session_state['_last_search_ts'] = _sb_ts
-    pattern_input   = _sb_result['query'].strip() if (_sb_result and _sb_result.get('query')) else \
-                      st.session_state.get('_last_pattern', '')
-    if search_clicked:
+        # Use actual current query (may be empty if user cleared the bar)
+        pattern_input = _sb_result.get('query', '').strip()
         st.session_state['_last_pattern'] = pattern_input
+    else:
+        # Between reruns (filter changes, doc opens, etc.) keep the last typed query
+        pattern_input = st.session_state.get('_last_pattern', '')
 
     # ── Feature browser UI (shown only in feature mode) ──────────────────────
     if search_mode == 'feature':
@@ -2107,9 +2159,28 @@ with mid:
             "🏷️  Find tagged documents", type="primary", key="feat_browse_btn",
             disabled=not _feat_conditions,
         )
+
+        # If conditions/logic changed since last search, clear stale results so
+        # the old result set is not shown and no automatic re-search is triggered.
+        _stored_feat = st.session_state.get('_feat_search')
+        if _stored_feat:
+            _stored_conds, _stored_logic = _stored_feat
+            _conds_changed = (
+                [(n, v) for n, _, v in _feat_conditions] !=
+                [(n, v) for n, _, v in _stored_conds]
+            )
+            if _conds_changed or _stored_logic != _logic:
+                st.session_state.pop('_feat_search', None)
+                st.session_state['_search_results'] = []
+
         if _feat_search_btn and _feat_conditions:
             st.session_state['_feat_search'] = (_feat_conditions, _logic)
             st.session_state['_search_results'] = []
+
+        # If user hit the main Search button while in Feature Browse mode, show a hint.
+        if search_clicked:
+            st.info("In Feature Browse mode, use the **🏷️ Find tagged documents** button above to search.", icon="ℹ️")
+
         search_clicked = False
         pattern_input  = ''
     else:
@@ -2235,19 +2306,30 @@ if '_ctx_edit_result' in st.session_state:
 # ── Results ───────────────────────────────────────────────────────────────────
 _filters_active = any(v for v in active_filters.values() if v)
 
+# Detect filter changes: if filters changed since the last committed search,
+# clear stale results so the user knows a new Search click is needed.
+_active_filters_key = str(sorted((k, tuple(v)) for k, v in active_filters.items()))
+_last_filters_key   = st.session_state.get('_last_filters_key', '')
+if not search_clicked and _active_filters_key != _last_filters_key:
+    # Filters changed without a Search click — clear results from previous run
+    st.session_state['_search_results'] = []
+    st.session_state['_search_pattern'] = ''
+    # Don't update _last_filters_key here; do it only when search actually runs
+
 if search_clicked and pattern_input.strip() and corpus:
     try:
         if search_mode == 'document':
             results = search_by_name(pattern_input.strip(), _apply_filters(corpus, active_filters))
             if not results:
-                st.warning(f'No documents found matching "{pattern_input.strip()}".')
+                st.info(f'No documents found matching "{pattern_input.strip()}".', icon="🔍")
         else:
             results = run_search(pattern_input.strip(), position, name_filter, corpus, active_filters)
             if not results:
-                st.warning(f'No results found for **{pattern_input.strip()}**. Try a broader pattern or different filters.')
+                st.info(f'No results found for **{pattern_input.strip()}**. Try a broader pattern or different filters.', icon="🔍")
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
+        st.session_state['_last_filters_key'] = _active_filters_key
     except Exception as e:
         st.error(f"Search failed: {e}")
         results = []
@@ -2261,12 +2343,13 @@ elif search_clicked and _filters_active and not pattern_input.strip() and corpus
         for d in _apply_filters(corpus, active_filters)
     ]
     if not _filt_results:
-        st.warning("No documents match the selected filters.")
+        st.info("No documents match the selected filters.", icon="🗂️")
     st.session_state['_search_results'] = _filt_results
     st.session_state['_search_pattern'] = ''
     st.session_state['_search_mode']    = 'document'
+    st.session_state['_last_filters_key'] = _active_filters_key
 elif search_clicked and not pattern_input.strip() and not _filters_active:
-    st.warning("Please enter a search pattern or select a filter.")
+    st.info("Please enter a search pattern or select a filter.", icon="ℹ️")
 elif not _filters_active and not search_clicked and not pattern_input.strip():
     # All filters cleared and no query, no search — wipe stale filter-browse results only
     # (don't wipe real search results which have a non-empty _search_pattern)
