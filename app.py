@@ -243,12 +243,28 @@ _G = _alts(GUTTURALS)
 _E = _alts(EMPHATICS)
 
 
+def _pattern_char_to_regex(ch: str) -> str:
+    """Convert a single pattern character/wildcard to a regex fragment."""
+    if   ch == 'C': return _C
+    elif ch == 'V': return _V
+    elif ch == 'D': return _D
+    elif ch == 'G': return _G
+    elif ch == 'E': return _E
+    elif ch == '$': return '.*?'
+    else:           return re.escape(ch)
+
+
 def pattern_to_regex(pattern: str) -> re.Pattern:
     """
     Convert a PAI pattern string to a compiled regex.
-    Wildcards: C=consonant, V=vowel, D=diphthong, $=any chars (0 or more)
-    Word anchors: ^ at start = word must begin here
-                  # at end   = word must end here
+
+    Wildcards : C=consonant  V=vowel  D=diphthong  G=guttural  E=emphatic
+                $=any characters (0 or more)
+    Anchors   : ^ at start = word must begin here
+                # at end   = word must end here
+    Groups    : (x,y,z) = exactly one of the comma-separated alternatives
+                e.g. (q,ʾ)tv matches qtv and ʾtv
+                Each alternative can be a multi-character string or a wildcard.
     """
     pattern = unicodedata.normalize('NFC', pattern)
     anchor_start = pattern.startswith('^')
@@ -258,14 +274,24 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
     if anchor_end:   core = core[:-1]
 
     parts = []
-    for ch in core:
-        if   ch == 'C': parts.append(_C)
-        elif ch == 'V': parts.append(_V)
-        elif ch == 'D': parts.append(_D)
-        elif ch == 'G': parts.append(_G)
-        elif ch == 'E': parts.append(_E)
-        elif ch == '$': parts.append('.*?')
-        else:           parts.append(re.escape(ch))
+    i = 0
+    while i < len(core):
+        ch = core[i]
+        if ch == '(':
+            # Find the matching closing paren
+            j = core.find(')', i)
+            if j == -1:
+                raise re.error("Unmatched '(' in pattern")
+            inner = core[i + 1:j]
+            # Split on commas and convert each alternative
+            alternatives = [a.strip() for a in inner.split(',')]
+            alt_regexes = [''.join(_pattern_char_to_regex(c) for c in alt)
+                           for alt in alternatives]
+            parts.append('(?:' + '|'.join(alt_regexes) + ')')
+            i = j + 1
+        else:
+            parts.append(_pattern_char_to_regex(ch))
+            i += 1
 
     rx_str = ''.join(parts)
     if anchor_start: rx_str = '^' + rx_str
@@ -2138,8 +2164,11 @@ with mid:
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
           </span>
+          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+            <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
+          </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
-            e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>^ḥVCC#</b>
+            e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
           </span>
         </div>
         """, unsafe_allow_html=True)
@@ -2449,24 +2478,74 @@ if results:
         """, unsafe_allow_html=True)
 
     # ── Download search results as CSV ────────────────────────────────────────
+    # Columns: Document · Link · Matches · Matched words · all corpus metadata
+    # fields · one column per FEATURE_DEF (value or TRUE/FALSE for bool)
     import csv, io as _io
-    _csv_buf = _io.StringIO()
-    _csv_w   = csv.writer(_csv_buf)
-    _csv_w.writerow(['Document', 'Link', 'Matches', 'Matched words'])
+    _csv_buf  = _io.StringIO()
+    _csv_w    = csv.writer(_csv_buf)
+
+    # Metadata keys stored on every corpus entry — automatically includes any
+    # new fields added in the future (just keep them in load_corpus_index).
+    _META_KEYS = ['village', 'community', 'social_typology', 'geo_typology',
+                  'gender', 'status']
+    _META_LABELS = {
+        'village':         'שם יישוב',
+        'community':       'קהילה',
+        'social_typology': 'Social Typology',
+        'geo_typology':    'Geo Typology',
+        'gender':          'מגדר דובר',
+        'status':          'Status',
+    }
+    _feat_names_dl = [fd[2] for fd in FEATURE_DEFS]
+
+    _csv_w.writerow(
+        ['Document', 'Link', 'Matches', 'Matched words']
+        + [_META_LABELS.get(k, k) for k in _META_KEYS]
+        + _feat_names_dl
+    )
+
     _seen_dl = set()
     for _r in results:
         if _r['doc_id'] in _seen_dl:
             continue
         _seen_dl.add(_r['doc_id'])
+
         _words = ', '.join(list(dict.fromkeys(
             _STRIP_MARK.sub('', w) for w in _r.get('matched_words', [])
         )))
         _link = f"https://docs.google.com/document/d/{_r['doc_id']}/edit"
-        _csv_w.writerow([_r['name'], _link, _r['match_count'], _words])
+
+        # Look up corpus entry for this doc to get full metadata
+        _corpus_entry = next((d for d in corpus if d['doc_id'] == _r['doc_id']), None)
+        _meta_vals = [(_corpus_entry or _r).get(k, '') for k in _META_KEYS]
+
+        # Fetch feature values for this document's sheet row (cached)
+        _feat_vals = []
+        _srow = (_corpus_entry or {}).get('sheet_row') or _r.get('sheet_row')
+        if _srow:
+            try:
+                _fdata = get_sheet_features(_srow)
+                for _fd in FEATURE_DEFS:
+                    _v = _fdata.get(_fd[1])
+                    if _fd[3] == 'bool':
+                        _feat_vals.append('TRUE' if _v else 'FALSE')
+                    else:
+                        _feat_vals.append(_v if _v not in (None, '', False) else '')
+            except Exception:
+                _feat_vals = [''] * len(FEATURE_DEFS)
+        else:
+            _feat_vals = [''] * len(FEATURE_DEFS)
+
+        _csv_w.writerow(
+            [_r['name'], _link, _r.get('match_count', ''), _words]
+            + _meta_vals
+            + _feat_vals
+        )
+
     st.download_button(
         label="⬇ Download results (CSV)",
         data=_csv_buf.getvalue().encode('utf-8-sig'),
-        file_name=f"pai_search_{pattern_shown}.csv",
+        file_name=f"pai_search_{pattern_shown or 'filtered'}.csv",
         mime='text/csv',
         key='dl_search_results',
     )
@@ -2654,13 +2733,35 @@ if st.session_state.get('_feat_search') and corpus:
         import csv as _csv_mod, io as _io2
         _fbuf = _io2.StringIO()
         _fw   = _csv_mod.writer(_fbuf)
-        _feat_col_names = [fn for fn, _, _ in _feat_conditions]
-        _fw.writerow(['Document', 'Village', 'Community', 'Link'] + _feat_col_names)
+        # All metadata fields + ALL feature columns (not just the searched ones)
+        _fb_meta_keys   = ['village', 'community', 'social_typology', 'geo_typology',
+                           'gender', 'status']
+        _fb_meta_labels = ['שם יישוב', 'קהילה', 'Social Typology', 'Geo Typology',
+                           'מגדר דובר', 'Status']
+        _all_feat_names = [fd[2] for fd in FEATURE_DEFS]
+        _fw.writerow(['Document', 'Link'] + _fb_meta_labels + _all_feat_names)
         for _fr in _feat_rows:
+            _fb_meta_vals = [_fr.get(k, '') for k in _fb_meta_keys]
+            # Fetch full feature row from sheet
+            _fb_feat_vals = []
+            _fb_srow = _fr.get('sheet_row')
+            if _fb_srow:
+                try:
+                    _fb_fdata = get_sheet_features(_fb_srow)
+                    for _fd in FEATURE_DEFS:
+                        _v = _fb_fdata.get(_fd[1])
+                        if _fd[3] == 'bool':
+                            _fb_feat_vals.append('TRUE' if _v else 'FALSE')
+                        else:
+                            _fb_feat_vals.append(_v if _v not in (None, '', False) else '')
+                except Exception:
+                    _fb_feat_vals = [''] * len(FEATURE_DEFS)
+            else:
+                _fb_feat_vals = [''] * len(FEATURE_DEFS)
             _fw.writerow([
-                _fr['name'], _fr['village'], _fr['community'],
+                _fr['name'],
                 f"https://docs.google.com/document/d/{_fr['doc_id']}/edit",
-            ] + [_fr['values'].get(fn, '') for fn in _feat_col_names])
+            ] + _fb_meta_vals + _fb_feat_vals)
         st.download_button(
             label="⬇ Download feature results (CSV)",
             data=_fbuf.getvalue().encode('utf-8-sig'),
