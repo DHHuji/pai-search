@@ -246,7 +246,7 @@ _E = _alts(EMPHATICS)
 def pattern_to_regex(pattern: str) -> re.Pattern:
     """
     Convert a PAI pattern string to a compiled regex.
-    Wildcards: C=consonant, V=vowel, D=diphthong, $=any char
+    Wildcards: C=consonant, V=vowel, D=diphthong, $=any chars (0 or more)
     Word anchors: ^ at start = word must begin here
                   # at end   = word must end here
     """
@@ -264,7 +264,7 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
         elif ch == 'D': parts.append(_D)
         elif ch == 'G': parts.append(_G)
         elif ch == 'E': parts.append(_E)
-        elif ch == '$': parts.append('.')
+        elif ch == '$': parts.append('.*?')
         else:           parts.append(re.escape(ch))
 
     rx_str = ''.join(parts)
@@ -1597,9 +1597,14 @@ def update_gdoc_features_section(
 
     # ── Write to Google Doc ────────────────────────────────────────────────────
     block_len = len(new_block)
+    # "FEATURES:" is always the first line; its length (with newline) is used to
+    # apply bold+non-italic style to just the heading, not the content lines.
+    heading_len = len('FEATURES:\n')
+
     if feat_start is None:
         insert_at = body_content[-1]['endIndex'] - 1
         full_text  = '\n\n' + new_block
+        heading_start = insert_at + 2   # skip the two leading newlines
         docs_svc.documents().batchUpdate(
             documentId=doc_id,
             body={'requests': [
@@ -1607,7 +1612,7 @@ def update_gdoc_features_section(
                     'location': {'index': insert_at},
                     'text': full_text,
                 }},
-                # Clear any inherited background color on the inserted block
+                # Clear inherited background on the whole block
                 {'updateTextStyle': {
                     'range': {
                         'startIndex': insert_at,
@@ -1615,6 +1620,15 @@ def update_gdoc_features_section(
                     },
                     'textStyle': {'backgroundColor': {}},
                     'fields': 'backgroundColor',
+                }},
+                # Bold + non-italic for "FEATURES:" heading only
+                {'updateTextStyle': {
+                    'range': {
+                        'startIndex': heading_start,
+                        'endIndex':   heading_start + heading_len,
+                    },
+                    'textStyle': {'bold': True, 'italic': False},
+                    'fields': 'bold,italic',
                 }},
             ]},
         ).execute()
@@ -1630,7 +1644,7 @@ def update_gdoc_features_section(
                     'location': {'index': feat_start},
                     'text': new_block,
                 }},
-                # Clear any inherited background color on the inserted block
+                # Clear inherited background on the whole block
                 {'updateTextStyle': {
                     'range': {
                         'startIndex': feat_start,
@@ -1638,6 +1652,15 @@ def update_gdoc_features_section(
                     },
                     'textStyle': {'backgroundColor': {}},
                     'fields': 'backgroundColor',
+                }},
+                # Bold + non-italic for "FEATURES:" heading only
+                {'updateTextStyle': {
+                    'range': {
+                        'startIndex': feat_start,
+                        'endIndex':   feat_start + heading_len,
+                    },
+                    'textStyle': {'bold': True, 'italic': False},
+                    'fields': 'bold,italic',
                 }},
             ]},
         ).execute()
@@ -1925,8 +1948,8 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                     return
 
                 # Separate features by: conflict / same-value duplicate / genuinely new
-                conflicts  = []
-                to_write   = {}   # features with new values → write to spreadsheet
+                conflicts  = []   # existing value differs → overwrite, but warn
+                to_write   = {}   # features with new (or overwriting) values → write
                 for col_l, new_val in (pending or {}).items():
                     cur_val = current.get(col_l)
                     cell_empty = cur_val in (None, False, '', 0)
@@ -1934,35 +1957,42 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                         fd_tmp = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
                         name_tmp = fd_tmp[2] if fd_tmp else col_l
                         conflicts.append(
-                            f"**{name_tmp}**: spreadsheet has `{cur_val}`, you tagged `{new_val}`"
+                            f"**{name_tmp}**: was `{cur_val}`, now overwritten with `{new_val}`"
                         )
+                        to_write[col_l] = new_val   # overwrite — user intent wins
                     elif cell_empty:
                         to_write[col_l] = new_val
                     # else: same value already in sheet → skip spreadsheet write,
                     #       but still update example word in Google Doc below
 
-                if conflicts:
-                    st.error(
-                        "⚠️  Existing values differ — **not written**:\n\n"
-                        + "\n".join(f"- {c}" for c in conflicts)
-                    )
-                    st.session_state[f"{sk}_confirm"] = False
-                    return
-
-                # Write genuinely new values to spreadsheet
+                # Write all values to spreadsheet (with retry on transient errors)
                 if to_write:
-                    try:
-                        write_sheet_features(sheet_rows[0], to_write)
-                    except Exception as e:
-                        st.error(f"Spreadsheet write failed: {e}")
-                        st.session_state[f"{sk}_confirm"] = False
-                        return
+                    for _attempt in range(2):
+                        try:
+                            write_sheet_features(sheet_rows[0], to_write)
+                            break
+                        except Exception as e:
+                            if _attempt == 0 and 'pipe' in str(e).lower():
+                                import time as _time; _time.sleep(1)
+                                continue
+                            st.error(f"Spreadsheet write failed: {e}")
+                            st.session_state[f"{sk}_confirm"] = False
+                            break  # don't continue to doc update
+                    else:
+                        pass  # wrote successfully on retry
                     # Write to remaining rows (split recordings)
                     for extra_row in sheet_rows[1:]:
                         try:
                             write_sheet_features(extra_row, to_write)
                         except Exception as e:
                             st.error(f"Row {extra_row} write failed: {e}")
+
+                # Warn about overwritten values (after successful write)
+                if conflicts:
+                    st.warning(
+                        "⚠️  Some features already had a different value — overwritten:\n\n"
+                        + "\n".join(f"- {c}" for c in conflicts)
+                    )
 
                 # Update Google Doc: only the pending features (NOT the full table)
                 try:
@@ -2104,7 +2134,7 @@ with mid:
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
           <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
           <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
-          <span class="legend-pill"><b>$</b> = any character</span>
+          <span class="legend-pill"><b>$</b> = any characters (0 or more)</span>
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
           </span>
@@ -2255,11 +2285,21 @@ with mid:
                 placeholder="All communities…",
             )
 
+        _fc3, _fc4 = st.columns(2)
+        with _fc3:
+            filt_gender = st.multiselect(
+                "מגדר דובר",
+                options=_corpus_vals('gender'),
+                key="filt_gender",
+                placeholder="All genders…",
+            )
+
         active_filters = {
             'village':         filt_village,
             'social_typology': filt_social,
             'geo_typology':    filt_geo,
             'community':       filt_community,
+            'gender':          filt_gender,
         }
         name_filter = ''  # removed; kept as empty string for backward compat
 
