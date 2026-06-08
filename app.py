@@ -1341,7 +1341,7 @@ def debug_corpus_load(tail: int = 20) -> dict:
     }
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def get_doc_content(doc_id: str, version: int = 0) -> dict:
     """
     Fetches a Google Doc via the Drive API HTML export.
@@ -2065,6 +2065,25 @@ with st.spinner("Loading corpus…"):
     except Exception as e:
         st.error(f"Could not load corpus index: {e}")
         corpus = []
+
+# ── Background preload: fetch all doc content into disk cache ─────────────────
+# Runs once per session in a daemon thread so the first search is instant.
+# get_doc_content uses persist="disk" so the cache survives app restarts/sleep.
+if corpus and not st.session_state.get('_preload_started'):
+    st.session_state['_preload_started'] = True
+    import threading as _threading
+    def _preload_all_docs(docs):
+        for doc in docs:
+            try:
+                _ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
+                get_doc_content(doc['doc_id'], version=_ver)
+            except Exception:
+                pass   # silently skip — search will fetch on demand if needed
+    _threading.Thread(
+        target=_preload_all_docs,
+        args=(list(corpus),),
+        daemon=True,
+    ).start()
 
 with st.sidebar:
     st.markdown("### 📚 Corpus")
