@@ -107,11 +107,13 @@ var srchBtn = document.getElementById('search-btn');
 var WILDCARDS = [
   {ch:'^', cls:'anchor',   title:'start of word — word must begin here'},
   {ch:'C', cls:'wildcard', title:'any consonant'},
-  {ch:'V', cls:'wildcard', title:'any vowel'},
+  {ch:'V', cls:'wildcard', title:'any vowel (long or short)'},
+  {ch:'S', cls:'wildcard', title:'any short vowel (a e i o u ə)'},
+  {ch:'L', cls:'wildcard', title:'any long vowel (ā ē ī ō ū ā̈)'},
   {ch:'D', cls:'wildcard', title:'any diphthong (aw / ay)'},
   {ch:'G', cls:'wildcard', title:'any guttural (h x ḥ ʿ ġ q)'},
   {ch:'E', cls:'wildcard', title:'any emphatic (ḍ ẓ ṣ ḏ̣)'},
-  {ch:'$', cls:'wildcard', title:'any single character'},
+  {ch:'$', cls:'wildcard', title:'any characters (0 or more)'},
   {ch:'#', cls:'anchor',   title:'end of word — word must end here'},
 ];
 var SPECIAL = ['ʾ','ʿ','‿','ḥ','ḍ','ṭ','ṯ','ġ','ğ','ž','č','š','ṣ','ḏ','ḏ̣'];

@@ -226,7 +226,9 @@ CONSONANTS: set = {
     'b','t','ṯ','ǧ','ž','ḥ','x','d','ḏ','r','z','s','š','ṣ','ḍ','ẓ','ṭ',
     'ġ','f','q','g','k','č','ḳ','l','m','n','h','w','y','ʿ','ʾ','p',
 }
-VOWELS: set = { 'a','e','i','u','o','ā','ō','ū','ī','ē','ɑ̄','ə' }
+SHORT_VOWELS: set = {'a', 'e', 'i', 'u', 'o', 'ə'}
+LONG_VOWELS:  set = {'ā', 'ē', 'ī', 'ō', 'ū', 'ā̈', 'ɑ̄'}  # ɑ̄ = variant encoding of ā̈
+VOWELS:       set = SHORT_VOWELS | LONG_VOWELS
 DIPHTHONGS: list = ['aw','ay','ōw','ēy']
 
 GUTTURALS: set  = {'h','x','ḥ','ʿ','ġ','q'}          # G wildcard
@@ -239,6 +241,8 @@ def _alts(items) -> str:
 
 _C = _alts(CONSONANTS)
 _V = _alts(VOWELS)
+_S = _alts(SHORT_VOWELS)   # S = short vowel
+_L = _alts(LONG_VOWELS)    # L = long  vowel
 _D = _alts(DIPHTHONGS)
 _G = _alts(GUTTURALS)
 _E = _alts(EMPHATICS)
@@ -248,6 +252,8 @@ def _pattern_char_to_regex(ch: str) -> str:
     """Convert a single pattern character/wildcard to a regex fragment."""
     if   ch == 'C': return _C
     elif ch == 'V': return _V
+    elif ch == 'S': return _S
+    elif ch == 'L': return _L
     elif ch == 'D': return _D
     elif ch == 'G': return _G
     elif ch == 'E': return _E
@@ -259,7 +265,8 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
     """
     Convert a PAI pattern string to a compiled regex.
 
-    Wildcards : C=consonant  V=vowel  D=diphthong  G=guttural  E=emphatic
+    Wildcards : C=consonant  V=vowel (all)  S=short vowel  L=long vowel
+                D=diphthong  G=guttural  E=emphatic
                 $=any characters (0 or more)
     Anchors   : ^ at start = word must begin here
                 # at end   = word must end here
@@ -317,6 +324,43 @@ def parse_sequence_pattern(pattern: str) -> list[re.Pattern]:
     if not parts:
         raise re.error("Empty pattern")
     return [pattern_to_regex(p) for p in parts]
+
+
+def root_to_pattern(root_input: str) -> str:
+    """
+    Convert a Semitic root string into a $-separated search pattern.
+    Each letter (or alternatives group) is surrounded by $ wildcards so that
+    the pattern matches any word containing the root letters in order with
+    any characters between them.
+
+    Examples
+    --------
+    'ktb'          → '$k$t$b$'
+    '(q,ʾ,k)tv'   → '$(q,ʾ,k)$t$v$'
+    'k t b'        → '$k$t$b$'   (spaces ignored)
+    """
+    root_input = unicodedata.normalize('NFC', root_input.strip())
+    letters = []
+    i = 0
+    while i < len(root_input):
+        ch = root_input[i]
+        if ch in (' ', '\t'):
+            i += 1
+            continue
+        if ch == '(':
+            j = root_input.find(')', i)
+            if j == -1:
+                letters.append(ch)
+                i += 1
+            else:
+                letters.append(root_input[i:j + 1])
+                i = j + 1
+        else:
+            letters.append(ch)
+            i += 1
+    if not letters:
+        return ''
+    return '$' + '$'.join(letters) + '$'
 
 
 def _subpattern_position(rx: re.Pattern, ui_position: str) -> str:
@@ -2269,9 +2313,10 @@ with mid:
     # ── Search mode toggle ────────────────────────────────────────────────────
     search_mode = st.radio(
         "search_mode",
-        options=['transcription', 'document', 'feature'],
+        options=['transcription', 'root', 'document', 'feature'],
         format_func=lambda x: {
             'transcription': '🔍  Search transcriptions',
+            'root':          '🔡  Root search (שורש)',
             'document':      '📄  Find document by name / ID',
             'feature':       '🏷️  Browse by feature',
         }[x],
@@ -2284,7 +2329,9 @@ with mid:
         st.markdown("""
         <div class="legend-row">
           <span class="legend-pill"><b>C</b> = consonant</span>
-          <span class="legend-pill"><b>V</b> = vowel</span>
+          <span class="legend-pill"><b>V</b> = vowel (long or short)</span>
+          <span class="legend-pill"><b>S</b> = short vowel (a e i o u ə)</span>
+          <span class="legend-pill"><b>L</b> = long vowel (ā ē ī ō ū ā̈)</span>
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
           <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
           <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
@@ -2301,6 +2348,49 @@ with mid:
           </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
             e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
+          </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Common correspondences info panel ─────────────────────────────────
+        with st.expander("📖  Common letter correspondences (click to expand)"):
+            st.markdown("""
+<style>
+.corr-table { border-collapse:collapse; width:100%; font-size:.93rem; }
+.corr-table th { background:#e3f0ff; color:#1a2b3c; text-align:left;
+                 padding:6px 14px; border-bottom:2px solid #90caf9; }
+.corr-table td { padding:5px 14px; border-bottom:1px solid #dce8f5; vertical-align:top; }
+.corr-table td:first-child { font-weight:700; font-size:1.05rem; color:#0d3f75; width:80px; }
+.corr-table td:nth-child(2) { color:#555; }
+.corr-table td:last-child  { font-family:monospace; color:#6a1b9a; }
+</style>
+<table class="corr-table">
+  <tr><th>Letter</th><th>Corresponds to</th><th>Use in search</th></tr>
+  <tr><td>ق &nbsp;q</td><td>q, ʾ, k, ḳ, g, ǧ</td><td><code>(q,ʾ,k,ḳ,g,ǧ)</code></td></tr>
+  <tr><td>ج &nbsp;ǧ</td><td>ǧ, ž</td><td><code>(ǧ,ž)</code></td></tr>
+  <tr><td>ذ &nbsp;ḏ</td><td>d, z</td><td><code>(ḏ,d,z)</code></td></tr>
+  <tr><td>ث &nbsp;ṯ</td><td>t, s</td><td><code>(ṯ,t,s)</code></td></tr>
+  <tr><td>ظ &nbsp;ḏ̣</td><td>ḍ, ẓ</td><td><code>(ḏ̣,ḍ,ẓ)</code></td></tr>
+  <tr><td>ك &nbsp;k</td><td>k, č</td><td><code>(k,č)</code></td></tr>
+</table>
+<p style="margin-top:8px;font-size:.85rem;color:#666">
+  Tip: combine with root search — e.g. enter <code>(q,ʾ,k,ḳ,g,ǧ)tv</code> as a root to find all
+  reflex variants of a ق-root word.
+</p>
+            """, unsafe_allow_html=True)
+
+    elif search_mode == 'root':
+        st.markdown("""
+        <div class="legend-row">
+          <span class="legend-pill" style="background:#e8f5e9;border-color:#a5d6a7;color:#1b5e20">
+            Enter 3+ root letters in order — the search finds any word containing
+            those letters with anything between them.
+          </span>
+          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+            Use <b>(x,y,z)</b> for a letter with multiple reflexes — e.g.&nbsp;<b>(q,ʾ,k,ḳ,g,ǧ)</b>
+          </span>
+          <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
+            e.g.&nbsp;<b>k t b</b>&nbsp;·&nbsp;<b>(q,ʾ,k,ḳ,g,ǧ)tv</b>&nbsp;·&nbsp;<b>(ǧ,ž)ls</b>
           </span>
         </div>
         """, unsafe_allow_html=True)
@@ -2393,6 +2483,23 @@ with mid:
 
         search_clicked = False
         pattern_input  = ''
+    elif search_mode == 'root':
+        # ── Root search: expand letter sequence into $-wildcard pattern ───────
+        st.session_state.pop('_feat_search', None)
+        if search_clicked and pattern_input:
+            _expanded = root_to_pattern(pattern_input)
+            if _expanded:
+                # Show what pattern was built so user understands the match
+                st.caption(f"Pattern used: `{_expanded}`")
+                pattern_input = _expanded
+            else:
+                st.info("Enter root letters to search (e.g. k t b).", icon="ℹ️")
+                search_clicked = False
+        elif not pattern_input:
+            if search_clicked:
+                st.info("Enter root letters to search (e.g. k t b).", icon="ℹ️")
+                search_clicked = False
+        # search_mode stays 'root' here; search execution block below converts it
     else:
         st.session_state.pop('_feat_search', None)
 
@@ -2414,6 +2521,9 @@ with mid:
                     'end':      '▶  End of word',
                 }[x],
             )
+        elif search_mode == 'root':
+            st.info("Root search always matches letters in any position within the word ($ wildcards are added automatically).", icon="ℹ️")
+            position = 'anywhere'
         else:
             st.info("In document search mode the query is matched literally (no regex) against document names and metadata.", icon="ℹ️")
             position = 'anywhere'
@@ -2565,17 +2675,22 @@ if search_clicked and _is_searching:
     search_clicked = False
 
 if search_clicked and pattern_input.strip() and corpus:
+    # Root mode: expand root letters to $-pattern (position already set to 'anywhere')
+    _effective_pattern = pattern_input.strip()
+    if search_mode == 'root':
+        _effective_pattern = root_to_pattern(_effective_pattern)
+        search_mode = 'transcription'  # use transcription search internally
     st.session_state['_searching'] = True
     st.session_state['_search_start_ts'] = time.time()
     try:
         if search_mode == 'document':
-            results = search_by_name(pattern_input.strip(), _apply_filters(corpus, active_filters))
+            results = search_by_name(_effective_pattern, _apply_filters(corpus, active_filters))
             if not results:
-                st.info(f'No documents found matching "{pattern_input.strip()}".', icon="🔍")
+                st.info(f'No documents found matching "{_effective_pattern}".', icon="🔍")
         else:
-            results = run_search(pattern_input.strip(), position, name_filter, corpus, active_filters)
+            results = run_search(_effective_pattern, position, name_filter, corpus, active_filters)
             if not results:
-                st.info(f'No results found for **{pattern_input.strip()}**. Try a broader pattern or different filters.', icon="🔍")
+                st.info(f'No results found for **{_effective_pattern}**. Try a broader pattern or different filters.', icon="🔍")
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
