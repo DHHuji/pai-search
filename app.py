@@ -1761,47 +1761,62 @@ def run_search(
         st.info("No documents match the name filter.", icon="🔍")
         return []
 
-    results  = []
-    bar      = st.progress(0.0, text="Loading corpus…")
+    # Snapshot doc versions — safe to pass into threads
+    _doc_versions = dict(st.session_state.get('_doc_versions', {}))
+
+    bar = st.progress(0.0, text=f"Searching {len(corpus)} documents…")
+    results      = []
     _load_errors = []
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _fetch_and_search(doc):
+        ver     = _doc_versions.get(doc['doc_id'], 0)
+        content = get_doc_content(doc['doc_id'], version=ver)
+        search_text   = content['italic_text']
+        match_count   = 0
+        matched_words = []
+        for word in tokenize(search_text):
+            hits = match_word(word, rx, position)
+            if hits:
+                match_count += len(hits)
+                matched_words.append(highlight_word(word, hits))
+        if match_count > 0:
+            display_html = highlight_in_exported_html(content['display_html'], rx)
+            return {
+                'name':          doc['name'],
+                'doc_id':        doc['doc_id'],
+                'sheet_row':     doc.get('sheet_row'),
+                'village':       doc.get('village', ''),
+                'community':     doc.get('community', ''),
+                'gender':        doc.get('gender', ''),
+                'status':        doc.get('status', ''),
+                'match_count':   match_count,
+                'word_count':    len(tokenize(search_text)),
+                'matched_words': matched_words[:15],
+                'display_html':  display_html,
+            }
+        return None
+
     try:
-        for i, doc in enumerate(corpus):
-            bar.progress((i + 1) / max(len(corpus), 1), text=f"Searching · {doc['name']}")
-            try:
-                _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
-                content  = get_doc_content(doc['doc_id'], version=_doc_ver)
-            except Exception as _doc_err:
-                _load_errors.append(f"{doc['name']}: {_doc_err}")
-                continue
-
-            search_text   = content['italic_text']
-            match_count   = 0
-            matched_words = []
-
-            for word in tokenize(search_text):
-                hits = match_word(word, rx, position)
-                if hits:
-                    match_count += len(hits)
-                    matched_words.append(highlight_word(word, hits))
-
-            if match_count > 0:
-                display_html = highlight_in_exported_html(content['display_html'], rx)
-                results.append({
-                    'name':          doc['name'],
-                    'doc_id':        doc['doc_id'],
-                    'sheet_row':     doc.get('sheet_row'),
-                    'village':       doc['village'],
-                    'community':     doc['community'],
-                    'gender':        doc['gender'],
-                    'status':        doc.get('status', ''),
-                    'match_count':   match_count,
-                    'word_count':    len(tokenize(search_text)),
-                    'matched_words': matched_words[:15],
-                    'display_html':  display_html,
-                })
+        total     = len(corpus)
+        completed = 0
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(_fetch_and_search, doc): doc for doc in corpus}
+            for future in as_completed(futures):
+                completed += 1
+                # Update progress bar at most every 5 % to avoid UI overhead
+                if completed % max(1, total // 20) == 0 or completed == total:
+                    bar.progress(completed / total,
+                                 text=f"Searching… {completed}/{total}")
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                except Exception as _doc_err:
+                    _load_errors.append(f"{futures[future]['name']}: {_doc_err}")
     finally:
-        bar.empty()   # always clear progress bar even if we crash
+        bar.empty()
 
     if _load_errors:
         st.warning(f"⚠️  {len(_load_errors)} document(s) could not be loaded and were skipped.")
@@ -2067,21 +2082,25 @@ with st.spinner("Loading corpus…"):
         corpus = []
 
 # ── Background preload: fetch all doc content into disk cache ─────────────────
-# Runs once per session in a daemon thread so the first search is instant.
+# Runs once per session using a thread pool (8 workers = ~8× faster than sequential).
 # get_doc_content uses persist="disk" so the cache survives app restarts/sleep.
 if corpus and not st.session_state.get('_preload_started'):
     st.session_state['_preload_started'] = True
     import threading as _threading
-    def _preload_all_docs(docs):
-        for doc in docs:
-            try:
-                _ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
-                get_doc_content(doc['doc_id'], version=_ver)
-            except Exception:
-                pass   # silently skip — search will fetch on demand if needed
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    # Snapshot versions now — background thread can't read session_state safely
+    _snap_versions = dict(st.session_state.get('_doc_versions', {}))
+    def _preload_one(doc, versions):
+        try:
+            get_doc_content(doc['doc_id'], version=versions.get(doc['doc_id'], 0))
+        except Exception:
+            pass
+    def _preload_all_docs(docs, versions):
+        with _TPE(max_workers=8) as ex:
+            list(ex.map(lambda d: _preload_one(d, versions), docs))
     _threading.Thread(
         target=_preload_all_docs,
-        args=(list(corpus),),
+        args=(list(corpus), _snap_versions),
         daemon=True,
     ).start()
 
