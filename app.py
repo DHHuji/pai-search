@@ -1482,29 +1482,45 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
 #  FEATURE READ / WRITE
 # ════════════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_sheet_features(sheet_row: int) -> dict:
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_all_sheet_features(version: int = 0) -> dict:
     """
-    Read feature values (columns M–AI) for a single Recordings sheet row.
-    Returns {col_letter: value} where value is True/False for bool cols or str for select cols.
+    Read the ENTIRE feature range (columns M–AI, all rows) in ONE API call and
+    return {sheet_row: {col_letter: value}}.  Cached for 1 hour; pass a different
+    version to bust the cache after a write.
     """
     _, _, sheets_svc = get_services()
     first_col, last_col = FEATURE_DEFS[0][1], FEATURE_DEFS[-1][1]   # 'M', 'AI'
-    range_a1 = f"Recordings!{first_col}{sheet_row}:{last_col}{sheet_row}"
+    range_a1 = f"Recordings!{first_col}2:{last_col}"   # row 2 onward (skip header)
     result = sheets_svc.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range=range_a1,
         valueRenderOption='UNFORMATTED_VALUE',
     ).execute()
-    raw = (result.get('values') or [[]])[0]
+    raw_rows = result.get('values') or []
     out = {}
-    for i, fd in enumerate(FEATURE_DEFS):
-        val = raw[i] if i < len(raw) else None
-        if fd[3] == 'bool':
-            out[fd[1]] = bool(val) if val is not None else None
-        else:
-            out[fd[1]] = str(val) if val else None
+    for i, row_vals in enumerate(raw_rows):
+        sheet_row = i + 2   # spreadsheet row index (1-based, header = row 1)
+        row_out = {}
+        for j, fd in enumerate(FEATURE_DEFS):
+            val = row_vals[j] if j < len(row_vals) else None
+            if fd[3] == 'bool':
+                row_out[fd[1]] = bool(val) if val is not None else None
+            else:
+                row_out[fd[1]] = str(val) if val else None
+        out[sheet_row] = row_out
     return out
+
+
+def get_sheet_features(sheet_row: int) -> dict:
+    """
+    Return feature values for a single sheet row.
+    Uses the batch cache (_get_all_sheet_features) so no extra API call is made —
+    all rows are loaded in one request and kept for 1 hour.
+    """
+    version = st.session_state.get('_features_version', 0)
+    all_features = _get_all_sheet_features(version=version)
+    return all_features.get(sheet_row, {fd[1]: None for fd in FEATURE_DEFS})
 
 
 def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str]:
@@ -1549,7 +1565,8 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
             spreadsheetId=SPREADSHEET_ID,
             body={'valueInputOption': 'RAW', 'data': data},
         ).execute()
-        get_sheet_features.clear()   # invalidate cache
+        # Bust the batch-features cache so the next open reflects the write
+        st.session_state['_features_version'] = st.session_state.get('_features_version', 0) + 1
 
     return []
 
