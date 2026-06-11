@@ -2333,7 +2333,7 @@ with mid:
         options=['transcription', 'root', 'document', 'feature'],
         format_func=lambda x: {
             'transcription': '🔍  Search transcriptions',
-            'root':          '🔡  Root search (שורש)',
+            'root':          '🔡  Root search',
             'document':      '📄  Find document by name / ID',
             'feature':       '🏷️  Browse by feature',
         }[x],
