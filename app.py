@@ -304,6 +304,44 @@ def tokenize(text: str) -> list:
     return [w for w in WORD_DELIM.split(unicodedata.normalize('NFC', text)) if w.strip()]
 
 
+def parse_sequence_pattern(pattern: str) -> list[re.Pattern]:
+    """
+    Split a search pattern on spaces and return one compiled regex per word-slot.
+    A space means "word boundary" — e.g. "g# ^G" matches a word ending in 'g'
+    immediately followed by a word starting with a guttural consonant.
+    Single-word patterns (no space) return a one-element list.
+    ^ and # anchors work per sub-pattern, not only at the very start/end of the
+    whole string.
+    """
+    parts = pattern.strip().split()
+    if not parts:
+        raise re.error("Empty pattern")
+    return [pattern_to_regex(p) for p in parts]
+
+
+def _subpattern_position(rx: re.Pattern, ui_position: str) -> str:
+    """Position to use with match_word() for a sequence sub-pattern.
+    Anchored sub-patterns (^ / $) handle positioning via the regex itself,
+    so we pass 'anywhere'.  Un-anchored sub-patterns use the UI radio value.
+    """
+    anchor_s, anchor_e = _is_word_anchored(rx)
+    return 'anywhere' if (anchor_s or anchor_e) else ui_position
+
+
+def _match_sequence(words: list, sub_rxs: list, ui_position: str):
+    """Check if len(words) consecutive words each match their sub-regex.
+    Returns list of (word, hits) if the full sequence matches, else [].
+    """
+    result = []
+    for word, rx in zip(words, sub_rxs):
+        pos  = _subpattern_position(rx, ui_position)
+        hits = match_word(word, rx, pos)
+        if not hits:
+            return []
+        result.append((word, hits))
+    return result
+
+
 def match_word(word: str, rx: re.Pattern, position: str) -> list:
     out = []
     for m in rx.finditer(word):
@@ -432,19 +470,25 @@ def _highlight_text_nodes(fragment: str, rx: re.Pattern) -> str:
                 out.append(''.join(result))
     return ''.join(out)
 
-def highlight_in_exported_html(html_doc: str, rx: re.Pattern) -> str:
+def highlight_in_exported_html(html_doc: str, rx_or_list) -> str:
     """
     Apply highlighting only inside transcription paragraphs (those that start
     with a digit or turn marker and contain PAI characters).  Speaker bios,
     the FEATURES section, and the metadata header are left untouched.
+    Accepts either a single re.Pattern or a list of patterns (for multi-word
+    sequence searches — each sub-pattern is highlighted independently).
     """
+    rxs      = rx_or_list if isinstance(rx_or_list, list) else [rx_or_list]
     result   = []
     last_end = 0
     for m in re.finditer(r'(<p\b[^>]*>)(.*?)(</p>)', html_doc, re.DOTALL | re.IGNORECASE):
         result.append(html_doc[last_end:m.start()])
         open_tag, body, close_tag = m.group(1), m.group(2), m.group(3)
         if _is_transcription_para(body):
-            result.append(open_tag + _highlight_text_nodes(body, rx) + close_tag)
+            highlighted = body
+            for rx in rxs:
+                highlighted = _highlight_text_nodes(highlighted, rx)
+            result.append(open_tag + highlighted + close_tag)
         else:
             result.append(m.group(0))
         last_end = m.end()
@@ -1773,7 +1817,7 @@ def run_search(
 ) -> list[dict]:
 
     try:
-        rx = pattern_to_regex(pattern)
+        sub_rxs = parse_sequence_pattern(pattern)
     except re.error as e:
         st.error(f"Invalid pattern: {e}")
         return []
@@ -1794,20 +1838,41 @@ def run_search(
     _load_errors = []
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    _n = len(sub_rxs)  # number of words in the pattern sequence
 
     def _fetch_and_search(doc):
         ver     = _doc_versions.get(doc['doc_id'], 0)
         content = get_doc_content(doc['doc_id'], version=ver)
         search_text   = content['italic_text']
+        word_list     = tokenize(search_text)
         match_count   = 0
         matched_words = []
-        for word in tokenize(search_text):
-            hits = match_word(word, rx, position)
-            if hits:
-                match_count += len(hits)
-                matched_words.append(highlight_word(word, hits))
+        seen_words    = set()
+
+        if _n == 1:
+            # Single-word pattern — original per-word loop (fastest path)
+            rx = sub_rxs[0]
+            for word in word_list:
+                hits = match_word(word, rx, _subpattern_position(rx, position))
+                if hits:
+                    match_count += len(hits)
+                    if word not in seen_words:
+                        seen_words.add(word)
+                        matched_words.append(highlight_word(word, hits))
+        else:
+            # Multi-word sequence pattern — slide an N-gram window
+            for i in range(len(word_list) - _n + 1):
+                ngram = word_list[i:i + _n]
+                seq   = _match_sequence(ngram, sub_rxs, position)
+                if seq:
+                    match_count += 1
+                    for word, hits in seq:
+                        if word not in seen_words:
+                            seen_words.add(word)
+                            matched_words.append(highlight_word(word, hits))
+
         if match_count > 0:
-            display_html = highlight_in_exported_html(content['display_html'], rx)
+            display_html = highlight_in_exported_html(content['display_html'], sub_rxs)
             return {
                 'name':          doc['name'],
                 'doc_id':        doc['doc_id'],
@@ -2229,6 +2294,10 @@ with mid:
           </span>
           <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
             <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
+          </span>
+          <span class="legend-pill" style="background:#e8f5e9;border-color:#a5d6a7;color:#1b5e20">
+            <b>space</b> = word boundary — matches consecutive words&nbsp;
+            e.g.&nbsp;<b>^CV#&nbsp;^CV</b>&nbsp;·&nbsp;<b>g#&nbsp;^G</b>
           </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
             e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
