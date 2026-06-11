@@ -11,6 +11,7 @@ import io
 import html as html_lib
 import unicodedata
 import json
+import time
 from pathlib import Path
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -890,16 +891,34 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
 var _paiWordIdx = {{}}, _paiLastHL = null, _paiLastBtn = null;
 function paiNavWord(btn) {{
   var word = btn.getAttribute('data-navword');
+  // Normalize both sides to NFC if available (guards against NFD mismatches)
+  var normWord = (typeof word === 'string' && String.prototype.normalize)
+                   ? word.normalize('NFC') : word;
   // Collect marks whose data-word matches this chip's word
   var allMarks = Array.from(document.querySelectorAll('mark[data-word]'));
   var wordMarks = allMarks.filter(function(m) {{
-    return m.getAttribute('data-word') === word;
+    var dw = m.getAttribute('data-word') || '';
+    var ndw = String.prototype.normalize ? dw.normalize('NFC') : dw;
+    return ndw === normWord;
   }});
-  // Fallback: marks whose data-word contains the chip word as substring
+  // Fallback 1: data-word contains the nav word (handles trailing punctuation)
   if (wordMarks.length === 0) {{
     wordMarks = allMarks.filter(function(m) {{
-      return m.getAttribute('data-word').indexOf(word) >= 0;
+      var ndw = String.prototype.normalize
+                  ? (m.getAttribute('data-word') || '').normalize('NFC') : (m.getAttribute('data-word') || '');
+      return ndw.indexOf(normWord) >= 0;
     }});
+  }}
+  // Fallback 2: nav word contains the mark's text content (match portion)
+  if (wordMarks.length === 0) {{
+    wordMarks = allMarks.filter(function(m) {{
+      var mc = String.prototype.normalize ? m.textContent.normalize('NFC') : m.textContent;
+      return normWord.indexOf(mc) >= 0 || mc.indexOf(normWord) >= 0;
+    }});
+  }}
+  // Fallback 3: use ALL marks so the jump still works
+  if (wordMarks.length === 0) {{
+    wordMarks = allMarks;
   }}
   if (wordMarks.length === 0) return;
 
@@ -1592,11 +1611,17 @@ def update_gdoc_features_section(
         # Merge example words: keep existing ones (from new-format lines),
         # append new word if not already present.  Separator is semicolon.
         ex_existing = existing_examples.get(col_l, '')
-        ex_new = (example_words.get(col_l) or '').strip()
-        if ex_new:
+        _ex_raw = example_words.get(col_l) or ''
+        # pending_words may be a list (accumulated from multiple tag actions) or a string
+        if isinstance(_ex_raw, list):
+            ex_new_items = [w.strip() for w in _ex_raw if w and w.strip()]
+        else:
+            ex_new_items = [_ex_raw.strip()] if _ex_raw.strip() else []
+        if ex_new_items:
             words_list = [w.strip() for w in ex_existing.split(';') if w.strip()]
-            if ex_new not in words_list:
-                words_list.append(ex_new)
+            for _wi in ex_new_items:
+                if _wi and _wi not in words_list:
+                    words_list.append(_wi)
             ex_merged = '; '.join(words_list)
         else:
             ex_merged = ex_existing
@@ -2215,6 +2240,7 @@ with mid:
     _sb_result = _SEARCH_BAR(
         key="searchbar",
         initial_value=st.session_state.get('_last_pattern', ''),
+        disabled=st.session_state.get('_searching', False),
     )
     _sb_ts          = (_sb_result.get('timestamp', 0) if _sb_result else 0)
     # On first run of a new session, consume any stale component value so it
@@ -2411,10 +2437,16 @@ if _bridge_tag:
                 if f"{sk}_pending_words" not in st.session_state:
                     st.session_state[f"{sk}_pending_words"] = {}
                 st.session_state[f"{sk}_pending"][fd[1]] = feat_val
-                # Store the clicked word (selText) alongside the feature
+                # Accumulate clicked words (selText) — keep a list per feature so
+                # tagging a second word under the same feature doesn't erase the first.
                 sel_text = _bridge_tag.get('selText', '').strip()
                 if sel_text:
-                    st.session_state[f"{sk}_pending_words"][fd[1]] = sel_text
+                    _existing_words = st.session_state[f"{sk}_pending_words"].get(fd[1], [])
+                    if isinstance(_existing_words, str):
+                        _existing_words = [_existing_words] if _existing_words else []
+                    if sel_text not in _existing_words:
+                        _existing_words = list(_existing_words) + [sel_text]
+                    st.session_state[f"{sk}_pending_words"][fd[1]] = _existing_words
                 st.session_state[f"{sk}_auto_expand"] = True
                 st.session_state['_last_bridge_ts'] = _bt_ts
 
@@ -2451,7 +2483,21 @@ if (not search_clicked
     st.session_state['_search_results'] = []
     st.session_state['_last_filters_key'] = _active_filters_key
 
+# Block new searches while one is already in progress (prevents crash from
+# concurrent ThreadPoolExecutor runs triggered by rapid repeated clicks).
+_is_searching = st.session_state.get('_searching', False)
+_search_start_ts = st.session_state.get('_search_start_ts', 0)
+if _is_searching and (time.time() - _search_start_ts) > 120:
+    # Safety valve: clear stuck flag after 2 minutes
+    st.session_state['_searching'] = False
+    _is_searching = False
+if search_clicked and _is_searching:
+    st.info("⏳ A search is already running — please wait for it to finish.", icon="⏳")
+    search_clicked = False
+
 if search_clicked and pattern_input.strip() and corpus:
+    st.session_state['_searching'] = True
+    st.session_state['_search_start_ts'] = time.time()
     try:
         if search_mode == 'document':
             results = search_by_name(pattern_input.strip(), _apply_filters(corpus, active_filters))
@@ -2469,6 +2515,8 @@ if search_clicked and pattern_input.strip() and corpus:
         st.error(f"Search failed: {e}")
         results = []
         st.session_state['_search_results'] = []
+    finally:
+        st.session_state['_searching'] = False
 elif search_clicked and _filters_active and not pattern_input.strip() and corpus and search_mode != 'feature':
     # Search clicked with active filters but no text query — show filtered document list
     _filt_results = [

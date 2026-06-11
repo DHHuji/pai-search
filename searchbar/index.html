@@ -191,6 +191,12 @@ window.addEventListener('message', function(e) {
     if (args.initial_value != null) inp.value = args.initial_value;
     _inputInitialized = true;
   }
+  // Visually disable the Search button while a search is running
+  var isDisabled = !!args.disabled;
+  srchBtn.disabled = isDisabled;
+  srchBtn.style.opacity = isDisabled ? '0.55' : '1';
+  srchBtn.style.cursor  = isDisabled ? 'not-allowed' : 'pointer';
+  srchBtn.textContent   = isDisabled ? '⏳ Searching…' : 'Search';
   setTimeout(sendHeight, 20);
 });
 </script>
