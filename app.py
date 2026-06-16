@@ -2234,15 +2234,47 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
         return
 
     # ── Summary of staged tags ─────────────────────────────────────────────
+    # Each feature (and each individual tagged word under it) can be discarded
+    # on its own before submitting — no need to clear everything just to give
+    # up on one mis-tagged word out of several.
+    pending_words = st.session_state.get(f"{sk}_pending_words", {})
     n = len(pending)
-    tag_summaries = []
-    for col_l, val in pending.items():
-        fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
-        tag_summaries.append(f"`{fd[2] if fd else col_l}` = **{val}**")
+    st.markdown(f"🏷️ **{n} feature(s) staged** — remove any you don't want, then submit the rest:")
 
-    st.markdown(
-        f"🏷️ **{n} feature(s) staged:** " + "  ·  ".join(tag_summaries)
-    )
+    for col_l, val in list(pending.items()):
+        fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
+        feat_label = fd[2] if fd else col_l
+        words = pending_words.get(col_l, [])
+        if isinstance(words, str):
+            words = [words] if words else []
+
+        _row1, _row2 = st.columns([5, 1])
+        with _row1:
+            st.markdown(f"`{feat_label}` = **{val}**")
+        with _row2:
+            if st.button("🗑️ Remove", key=f"{sk}_rmfeat_{col_l}",
+                         help=f"Discard the {feat_label} tag entirely"):
+                pending.pop(col_l, None)
+                pending_words.pop(col_l, None)
+                st.session_state[f"{sk}_pending"] = pending
+                st.session_state[f"{sk}_pending_words"] = pending_words
+                st.rerun()
+
+        if words:
+            _word_cols = st.columns(len(words))
+            for i, w in enumerate(words):
+                with _word_cols[i]:
+                    if st.button(f"✕ {w}", key=f"{sk}_rmword_{col_l}_{i}",
+                                 help=f"Remove just this example word from {feat_label} (keeps the feature tag)"):
+                        new_words = [x for j, x in enumerate(words) if j != i]
+                        if new_words:
+                            pending_words[col_l] = new_words
+                        else:
+                            pending_words.pop(col_l, None)
+                        st.session_state[f"{sk}_pending_words"] = pending_words
+                        st.rerun()
+
+    st.divider()
 
     btn_col, clr_col = st.columns([4, 1])
     with btn_col:
@@ -2252,7 +2284,7 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
         ):
             st.session_state[f"{sk}_confirm"] = True
     with clr_col:
-        if st.button("✕ Clear", key=f"{sk}_clear_bar", use_container_width=True):
+        if st.button("✕ Clear all", key=f"{sk}_clear_bar", use_container_width=True):
             st.session_state[f"{sk}_pending"] = {}
             st.session_state[f"{sk}_doc_only"] = {}
             st.session_state[f"{sk}_pending_words"] = {}
@@ -2727,6 +2759,18 @@ with mid:
                 key="filt_gender",
                 placeholder="All genders…",
             )
+        with _fc4:
+            # Closed list: known statuses (in pipeline order) plus any extra
+            # value that shows up in the sheet but isn't in STATUS_COLORS yet.
+            _status_options = list(STATUS_COLORS.keys()) + [
+                v for v in _corpus_vals('status') if v not in STATUS_COLORS
+            ]
+            filt_status = st.multiselect(
+                "סטטוס",
+                options=_status_options,
+                key="filt_status",
+                placeholder="All statuses…",
+            )
 
         active_filters = {
             'village':         filt_village,
@@ -2734,6 +2778,7 @@ with mid:
             'geo_typology':    filt_geo,
             'community':       filt_community,
             'gender':          filt_gender,
+            'status':          filt_status,
         }
         name_filter = ''  # removed; kept as empty string for backward compat
 
