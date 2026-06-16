@@ -515,13 +515,99 @@ def _highlight_text_nodes(fragment: str, rx: re.Pattern) -> str:
                 out.append(''.join(result))
     return ''.join(out)
 
-def highlight_in_exported_html(html_doc: str, rx_or_list) -> str:
+def _highlight_text_nodes_sequence(fragment: str, sub_rxs: list, ui_position: str) -> str:
+    """
+    Multi-word sequence highlighting for a single paragraph fragment.
+
+    Unlike single-word highlighting, a multi-word pattern ("i# ^l") is only a
+    real match when N *consecutive* words each satisfy their own sub-pattern
+    in order. Highlighting each sub-pattern independently (the old behaviour)
+    marked every word matching ANY sub-pattern anywhere in the paragraph —
+    e.g. "i#" alone matched standalone "i" and every word ending in "i" such
+    as "fi", even when no word starting with "l" followed it. This rebuilds
+    the paragraph's word list (across formatting-tag boundaries) and only
+    marks the words that are actually part of a valid adjacent sequence.
+    """
+    parts = re.split(r'(<[^>]+>)', fragment)
+    n = len(sub_rxs)
+
+    # Pass 1 — tokenize every text part, building a flat word list that spans
+    # part boundaries (so a sequence can match across an inline tag).
+    node_tokens: list[list[str]] = []
+    node_seps:   list[list[str]] = []
+    flat_words:  list[tuple[int, int, str]] = []   # (part_idx, token_idx, word)
+
+    for idx, part in enumerate(parts):
+        if not part or part.startswith('<'):
+            node_tokens.append([])
+            node_seps.append([])
+            continue
+        text   = unicodedata.normalize('NFC', html_lib.unescape(part))
+        tokens = WORD_DELIM.split(text)
+        seps   = WORD_DELIM.findall(text)
+        while len(seps) < len(tokens):
+            seps.append('')
+        node_tokens.append(tokens)
+        node_seps.append(seps)
+        for t_idx, tok in enumerate(tokens):
+            if tok:
+                flat_words.append((idx, t_idx, tok))
+
+    # Pass 2 — slide an N-word window across the flat list; only words inside
+    # a window that satisfies the full sequence get marked for highlighting.
+    highlight_map: dict[tuple[int, int], list] = {}
+    for i in range(len(flat_words) - n + 1):
+        window     = flat_words[i:i + n]
+        words_only = [w for (_, _, w) in window]
+        seq        = _match_sequence(words_only, sub_rxs, ui_position)
+        if seq:
+            for (p_idx, t_idx, _), (_, hits) in zip(window, seq):
+                key = (p_idx, t_idx)
+                existing = highlight_map.get(key, [])
+                for h in hits:
+                    if h not in existing:
+                        existing.append(h)
+                highlight_map[key] = existing
+
+    # Pass 3 — re-render, marking only the highlighted occurrences.
+    out = []
+    for idx, part in enumerate(parts):
+        if not part or part.startswith('<'):
+            out.append(part)
+            continue
+        rendered = []
+        for t_idx, (tok, sep) in enumerate(zip(node_tokens[idx], node_seps[idx])):
+            if not tok:
+                rendered.append(html_lib.escape(sep))
+                continue
+            hits = highlight_map.get((idx, t_idx))
+            if hits:
+                last = 0
+                for hm in sorted(hits, key=lambda x: x.start()):
+                    rendered.append(html_lib.escape(tok[last:hm.start()]))
+                    rendered.append(
+                        f'<mark style="{_MARK_STYLE}" data-word="{html_lib.escape(tok)}">'
+                        f'{html_lib.escape(tok[hm.start():hm.end()])}</mark>'
+                    )
+                    last = hm.end()
+                rendered.append(html_lib.escape(tok[last:]))
+            else:
+                rendered.append(html_lib.escape(tok))
+            rendered.append(html_lib.escape(sep))
+        out.append(''.join(rendered))
+    return ''.join(out)
+
+
+def highlight_in_exported_html(html_doc: str, rx_or_list, position: str = 'anywhere') -> str:
     """
     Apply highlighting only inside transcription paragraphs (those that start
     with a digit or turn marker and contain PAI characters).  Speaker bios,
     the FEATURES section, and the metadata header are left untouched.
-    Accepts either a single re.Pattern or a list of patterns (for multi-word
-    sequence searches — each sub-pattern is highlighted independently).
+    Accepts either a single re.Pattern (single-word search) or a list of
+    patterns (multi-word sequence search) — sequence searches are highlighted
+    adjacency-aware via _highlight_text_nodes_sequence so only words that are
+    actually part of a matched sequence get marked, not every word that
+    matches any individual sub-pattern in isolation.
     """
     rxs      = rx_or_list if isinstance(rx_or_list, list) else [rx_or_list]
     result   = []
@@ -530,9 +616,10 @@ def highlight_in_exported_html(html_doc: str, rx_or_list) -> str:
         result.append(html_doc[last_end:m.start()])
         open_tag, body, close_tag = m.group(1), m.group(2), m.group(3)
         if _is_transcription_para(body):
-            highlighted = body
-            for rx in rxs:
-                highlighted = _highlight_text_nodes(highlighted, rx)
+            if len(rxs) > 1:
+                highlighted = _highlight_text_nodes_sequence(body, rxs, position)
+            else:
+                highlighted = _highlight_text_nodes(body, rxs[0])
             result.append(open_tag + highlighted + close_tag)
         else:
             result.append(m.group(0))
@@ -1950,7 +2037,7 @@ def run_search(
                             matched_words.append(highlight_word(word, hits))
 
         if match_count > 0:
-            display_html = highlight_in_exported_html(content['display_html'], sub_rxs)
+            display_html = highlight_in_exported_html(content['display_html'], sub_rxs, position)
             return {
                 'name':          doc['name'],
                 'doc_id':        doc['doc_id'],
