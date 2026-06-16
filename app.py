@@ -234,7 +234,12 @@ DIPHTHONGS: list = ['aw','ay','ōw','ēy']
 
 GUTTURALS: set  = {'h','x','ḥ','ʿ','ġ','q'}          # G wildcard
 EMPHATICS: set  = {'ḍ','ḏ̣','ẓ','ṣ'}                  # E wildcard
-WORD_DELIM = re.compile(r'[\s,.:;!?()\[\]{}"\'—–#]+|ʿ\u203Fʿ')
+#  NOTE: '(' / ')' are intentionally excluded — the transcription convention
+#  uses them for inline optional/elided sounds glued directly onto a word
+#  with no space, e.g. "(yi)twaṣṣafiš" or "(i)lli". Treating them as
+#  delimiters split these into two separate words ("i" + "lli") instead of
+#  the single intended word.
+WORD_DELIM = re.compile(r'[\s,.:;!?\[\]{}"\'—–#]+|ʿ\u203Fʿ')
 
 
 def _alts(items) -> str:
