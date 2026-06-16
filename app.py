@@ -2376,10 +2376,6 @@ with mid:
           <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
             <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
           </span>
-          <span class="legend-pill" style="background:#e8f5e9;border-color:#a5d6a7;color:#1b5e20">
-            <b>space</b> = word boundary — matches consecutive words&nbsp;
-            e.g.&nbsp;<b>^CV#&nbsp;^CV</b>&nbsp;·&nbsp;<b>g#&nbsp;^G</b>
-          </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
             e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
           </span>
@@ -2407,10 +2403,6 @@ with mid:
   <tr><td>ظ &nbsp;ḏ̣</td><td>ḍ, ẓ</td><td><code>(ḏ̣,ḍ,ẓ)</code></td></tr>
   <tr><td>ك &nbsp;k</td><td>k, č</td><td><code>(k,č)</code></td></tr>
 </table>
-<p style="margin-top:8px;font-size:.85rem;color:#666">
-  Tip: combine with root search — e.g. enter <code>(q,ʾ,k,ḳ,g,ǧ)tv</code> as a root to find all
-  reflex variants of a ق-root word.
-</p>
             """, unsafe_allow_html=True)
 
     elif search_mode == 'root':
