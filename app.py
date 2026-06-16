@@ -13,7 +13,16 @@ import unicodedata
 import json
 import time
 import threading
+import faulthandler
+import sys
 from pathlib import Path
+
+# If the process ever segfaults again, dump whatever Python stack each thread
+# was on to stderr (visible in the Streamlit Cloud logs) *before* the crash
+# takes the process down. Without this, a native crash leaves zero trace —
+# which is exactly what happened previously: the logs showed nothing but
+# "Segmentation fault" with no indication of which thread/call caused it.
+faulthandler.enable(file=sys.stderr, all_threads=True)
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -1303,10 +1312,16 @@ _FEAT_BY_NAME: dict = {fd[2]: fd for fd in FEATURE_DEFS}
 
 
 @st.cache_resource
-def _get_google_credentials():
-    creds_dict = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT"])
+def _get_service_account_info() -> dict:
+    # Just the parsed JSON secret — a plain dict, safe to share read-only
+    # across threads. The actual Credentials object (which holds the JWT
+    # signer) is built fresh per-thread below, NOT cached/shared here.
+    return json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT"])
+
+
+def _build_credentials():
     return service_account.Credentials.from_service_account_info(
-        creds_dict,
+        _get_service_account_info(),
         scopes=[
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/documents',
@@ -1315,19 +1330,27 @@ def _get_google_credentials():
     )
 
 
-# Each thread needs its OWN drive/docs/sheets service objects.
-# googleapiclient.discovery.build() wraps an httplib2 HTTP transport that is
-# NOT thread-safe — sharing one service object across the ThreadPoolExecutor
-# workers used during search/preload caused native segfaults (the http/SSL
-# connection state got corrupted under concurrent use, crashing the whole
-# process with no Python traceback). Thread-local storage gives every worker
-# thread its own transport while still avoiding a rebuild on every call.
+# Each thread needs its OWN credentials + drive/docs/sheets service objects.
+# Two separate thread-safety issues were stacked here:
+#  1. googleapiclient.discovery.build() wraps an httplib2 HTTP transport that
+#     is NOT thread-safe — sharing one service object across the
+#     ThreadPoolExecutor workers used during search/preload caused native
+#     segfaults (the http/SSL connection state got corrupted under
+#     concurrent use, crashing the whole process with no Python traceback).
+#  2. A single shared google.auth Credentials object signs JWTs (via the
+#     `cryptography` library's RSA signer) on token refresh. If multiple
+#     threads trigger a refresh/sign at the same moment on the SAME
+#     Credentials instance, that can also corrupt native OpenSSL state and
+#     segfault — even after (1) was fixed, since build() was still being
+#     handed one shared `creds` object.
+# Thread-local storage gives every worker thread its own credentials AND
+# transport, while still avoiding a rebuild on every call.
 _thread_local_services = threading.local()
 
 
 def get_services():
     if not hasattr(_thread_local_services, 'services'):
-        creds = _get_google_credentials()
+        creds   = _build_credentials()
         drive   = build('drive',   'v3', credentials=creds, cache_discovery=False)
         docs    = build('docs',    'v1', credentials=creds, cache_discovery=False)
         sheets  = build('sheets',  'v4', credentials=creds, cache_discovery=False)
@@ -2008,9 +2031,16 @@ def run_search(
     _load_errors = []
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    _n = len(sub_rxs)  # number of words in the pattern sequence
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+    _n   = len(sub_rxs)  # number of words in the pattern sequence
+    _ctx = get_script_run_ctx()
 
     def _fetch_and_search(doc):
+        # See the matching comment in the background-preload block above —
+        # propagate the ScriptRunContext into this worker thread before it
+        # touches st.cache_data (get_doc_content).
+        if _ctx is not None:
+            add_script_run_ctx(threading.current_thread(), _ctx)
         ver     = _doc_versions.get(doc['doc_id'], 0)
         content = get_doc_content(doc['doc_id'], version=ver)
         search_text   = content['italic_text']
@@ -2348,9 +2378,20 @@ if corpus and not st.session_state.get('_preload_started'):
     st.session_state['_preload_started'] = True
     import threading as _threading
     from concurrent.futures import ThreadPoolExecutor as _TPE
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
     # Snapshot versions now — background thread can't read session_state safely
     _snap_versions = dict(st.session_state.get('_doc_versions', {}))
+    _ctx = get_script_run_ctx()
     def _preload_one(doc, versions):
+        # Attach the Streamlit ScriptRunContext to THIS pool worker thread —
+        # called from inside the worker itself (the only reliable place to
+        # do it, since ThreadPoolExecutor creates worker threads lazily and
+        # there's no hook to tag them before they start running tasks).
+        # These threads call into st.cache_data internals, and Streamlit's
+        # documented guidance for background threads touching its APIs is to
+        # propagate the context explicitly rather than leaving it unset.
+        if _ctx is not None:
+            add_script_run_ctx(_threading.current_thread(), _ctx)
         try:
             get_doc_content(doc['doc_id'], version=versions.get(doc['doc_id'], 0))
         except Exception:
@@ -2358,11 +2399,14 @@ if corpus and not st.session_state.get('_preload_started'):
     def _preload_all_docs(docs, versions):
         with _TPE(max_workers=8) as ex:
             list(ex.map(lambda d: _preload_one(d, versions), docs))
-    _threading.Thread(
+    _preload_thread = _threading.Thread(
         target=_preload_all_docs,
         args=(list(corpus), _snap_versions),
         daemon=True,
-    ).start()
+    )
+    if _ctx is not None:
+        add_script_run_ctx(_preload_thread, _ctx)
+    _preload_thread.start()
 
 with st.sidebar:
     st.markdown("### 📚 Corpus")
