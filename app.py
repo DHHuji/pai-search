@@ -12,6 +12,7 @@ import html as html_lib
 import unicodedata
 import json
 import time
+import threading
 from pathlib import Path
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -1210,9 +1211,9 @@ _FEAT_BY_NAME: dict = {fd[2]: fd for fd in FEATURE_DEFS}
 
 
 @st.cache_resource
-def get_services():
+def _get_google_credentials():
     creds_dict = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT"])
-    creds = service_account.Credentials.from_service_account_info(
+    return service_account.Credentials.from_service_account_info(
         creds_dict,
         scopes=[
             'https://www.googleapis.com/auth/drive',
@@ -1220,10 +1221,26 @@ def get_services():
             'https://www.googleapis.com/auth/spreadsheets',
         ]
     )
-    drive   = build('drive',   'v3', credentials=creds)
-    docs    = build('docs',    'v1', credentials=creds)
-    sheets  = build('sheets',  'v4', credentials=creds)
-    return drive, docs, sheets
+
+
+# Each thread needs its OWN drive/docs/sheets service objects.
+# googleapiclient.discovery.build() wraps an httplib2 HTTP transport that is
+# NOT thread-safe — sharing one service object across the ThreadPoolExecutor
+# workers used during search/preload caused native segfaults (the http/SSL
+# connection state got corrupted under concurrent use, crashing the whole
+# process with no Python traceback). Thread-local storage gives every worker
+# thread its own transport while still avoiding a rebuild on every call.
+_thread_local_services = threading.local()
+
+
+def get_services():
+    if not hasattr(_thread_local_services, 'services'):
+        creds = _get_google_credentials()
+        drive   = build('drive',   'v3', credentials=creds, cache_discovery=False)
+        docs    = build('docs',    'v1', credentials=creds, cache_discovery=False)
+        sheets  = build('sheets',  'v4', credentials=creds, cache_discovery=False)
+        _thread_local_services.services = (drive, docs, sheets)
+    return _thread_local_services.services
 
 
 def _extract_doc_id(url: str) -> str | None:
