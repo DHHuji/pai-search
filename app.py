@@ -2369,11 +2369,19 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 # Persist tagged words into a doc-level store that survives submit,
                 # so they stay highlighted in the transcript after the page reruns.
                 saved_words = st.session_state.get(f"{sk}_saved_words", {})
-                for col_l, word in pending_words.items():
-                    if word:
+                for col_l, words in pending_words.items():
+                    # pending_words[col_l] is a LIST of example words (each can be
+                    # removed individually before submit — see the per-word ✕
+                    # buttons above). Flatten into saved_words as individual words,
+                    # not as a nested list, or downstream code that does
+                    # dict.fromkeys(...) over saved_words values breaks with
+                    # "TypeError: unhashable type: 'list'".
+                    word_list = words if isinstance(words, list) else ([words] if words else [])
+                    if word_list:
                         saved_words.setdefault(col_l, [])
-                        if word not in saved_words[col_l]:
-                            saved_words[col_l].append(word)
+                        for w in word_list:
+                            if w and w not in saved_words[col_l]:
+                                saved_words[col_l].append(w)
                 st.session_state[f"{sk}_saved_words"] = saved_words
 
                 st.session_state[f"{sk}_pending"] = {}
