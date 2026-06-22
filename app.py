@@ -1274,58 +1274,56 @@ def _status_badge(status: str) -> str:
         f'display:inline-block;line-height:1.6">{status}</span>'
     )
 
-# ── Feature column definitions: (1-based col, col_letter, display_name, type, options) ──
+# ── Feature column definitions, keyed by SPREADSHEET HEADER TEXT ────────────────
+# (header_text, display_name, type, options)
 # type: 'bool' = checkbox  |  'select' = fixed options  |  'text' = free text
 # ──────────────────────────────────────────────────────────────────────────────
-# NOTE (2026-06-22): the live "Recordings" sheet was reorganized — two new
-# non-feature columns were inserted before the feature block (now M/N =
-# 'תוכן ההקלטה' / 'תופעות בהקלטה'), most feature headers were renamed (e.g.
-# 'ق' → 'PHON. *q'), the "now" feature was relocated to the very end of the
-# block, the old "was" feature has no current column (retired — see below),
-# and 5 new feature columns were appended at the tail (AJ–AO). The block below
-# reflects the CURRENT live layout, columns O through AO, verified directly
-# against the user's freshly uploaded corpus snapshot. The column letters here
-# are positional (read/write code below pulls one contiguous range and indexes
-# into it by position) — if the sheet is ever reorganized again, this list
-# will need to be re-verified against the live header row the same way.
-# Display names are intentionally kept the SAME as before for any feature that
-# merely moved (not renamed in spirit) — changing them would orphan existing
-# "FEATURES:" lines already written into Google Docs, since those are matched
-# by display-name text, not by spreadsheet header text.
-FEATURE_DEFS: list[tuple] = [
-    (15, 'O',  'aCC>iCC',                              'bool',   None),
-    (16, 'P',  'diphthongs',                           'bool',   None),
-    (17, 'Q',  'fem. ending',                          'select', ['-i', '-e', '-a', 'pausal']),
-    (18, 'R',  'med. Imāla',                           'bool',   None),
-    (19, 'S',  '-a+n (Aram. sub.)',                    'bool',   None),
-    (20, 'T',  'pausal -u>-o#, -i>-e#',               'bool',   None),
-    (21, 'U',  'ج',                                    'select', ['ž', 'ǧ', 'conditioned']),
-    (22, 'V',  'ق',                                    'select', ['q', 'ʾ', 'g', 'k', 'g/ǧ/k (conditioned)']),
-    (23, 'W',  'assimilation of gutturals to the left','bool',   None),
-    (24, 'X',  'vowel epenthesis',                     'select', ['*CCC > CvCC', '*CCC > CCvC']),
-    (25, 'Y',  'vocal harmonizing',                    'bool',   None),
-    (26, 'Z',  'lowering of -uC>-oC/-iC>-eC',         'bool',   None),
-    (27, 'AA', 'independent pronoun 1.pl نحن',         'select', ['niḥna', 'iḥna']),
-    (28, 'AB', 'independent pronoun 3.pl هم',          'select', ['hinne/hinne', 'hunne', 'hunni', 'humme/homme', 'hum/hom']),
-    (29, 'AC', '2.m.pl pron. كم-',                     'select', ['-ku/-ko', '-kum/-kom', '-čin']),
-    (30, 'AD', '3.m.pl (poss. pro) هم-',               'select', ['-h- > -∅- (e.g. -on)', '-hum/-hom', '-hin/-hen']),
-    (31, 'AE', '3.f.sg pron. ها-',                     'select', ['-a', '-a / -ya (after -i-)', '-ha',
-                                                                   '-a; -ha only after -ū-',
-                                                                   '-a; -ha only after -ū- / -i-', '-hä#/-he#']),
-    (32, 'AF', 'impf. prefix 3.m.sg',                  'select', ['bi-', 'byi-', 'yi-']),
-    (33, 'AG', '"want"',                               'select', ['badd', 'bidd', 'widd']),
-    (34, 'AH', '"when?"',                              'select', ['ēmta', 'wēnta', 'wagtēš']),
-    (35, 'AI', '"here"',                               'select', ['hōn', 'hīn', 'hān', 'hina']),
-    # New (2026-06-22): distinct from the old "was" feature, which has no
-    # current spreadsheet column — see NOTE above and the retirement comment
-    # below DOC_ONLY_FEATURES.
-    (36, 'AJ', 'past continuous modifier',             'select', ['kān', 'kān / čān', 'baka~biki / yibki~yibka',
-                                                                  'baka/biki', 'baka~biki / yikbi~yikba', 'baʾa']),
-    (37, 'AK', '"he is saying"',                       'select', ['biʾūl']),
-    (38, 'AL', '"rooster/roosters"',                   'select', ['dīk / dyūk']),
-    (39, 'AM', '"heavy"',                              'select', ['tʾīl']),
-    (40, 'AN', '"now"',                                'select', ['issa/hassāʿa', 'hallaʾ/halʾēt/halkēt/halgēt', 'alḥīn']),
-    (41, 'AO', '"coffee"',                             'select', ['ʾahwi']),
+# IMPORTANT (2026-06-22 redesign): this list is no longer matched to the sheet
+# by column LETTER/position. Every time the app loads, get_feature_defs()
+# (defined below, near get_column_indices()) reads the live header row and
+# looks up each entry here by its exact header_text, resolving the *current*
+# column letter dynamically. This means the sheet's columns can be inserted,
+# removed, reordered, or renamed-and-restored without silently corrupting
+# reads/writes the way the old hardcoded-column-letter list did (see the
+# 2026-06-22 "ق=q shows no results" incident this replaces).
+# Display names are kept stable across header renames so existing "FEATURES:"
+# lines already written into Google Docs (matched by display-name, not header
+# text) don't get orphaned.
+# To add a NEW feature column that someone added directly in the spreadsheet,
+# use the "➕ Add a feature column" control in the sidebar (it persists to the
+# 'AppFeatureDefs' tab — see get_extra_feature_defs()) rather than editing
+# this hardcoded list, unless you're a developer doing a permanent addition.
+FEATURE_HEADER_DEFS: list[tuple] = [
+    ('PHON. aCC > iCC',                       'aCC>iCC',                              'bool',   None),
+    ('PHON. Diphthongs',                      'diphthongs',                           'bool',   None),
+    ('MOR. Fem. Ending',                      'fem. ending',                          'select', ['-i', '-e', '-a', 'pausal']),
+    ('PHON. Med. Imāla',                      'med. Imāla',                           'bool',   None),
+    ('-a+n (Aram. sub.)',                     '-a+n (Aram. sub.)',                    'bool',   None),
+    ('pausal -u>-o#, -i>-e#',                'pausal -u>-o#, -i>-e#',               'bool',   None),
+    ('PHON. *ǧ',                              'ج',                                    'select', ['ž', 'ǧ', 'conditioned']),
+    ('PHON. *q',                              'ق',                                    'select', ['q', 'ʾ', 'g', 'k', 'g/ǧ/k (conditioned)']),
+    ('assimilation of gutturals to the left', 'assimilation of gutturals to the left','bool',   None),
+    ('PHON. Vowel Epen.',                     'vowel epenthesis',                     'select', ['*CCC > CvCC', '*CCC > CCvC']),
+    ('vocal harmonizing',                     'vocal harmonizing',                    'bool',   None),
+    ('lowering of -uC>-oC/-iC>-eC',          'lowering of -uC>-oC/-iC>-eC',         'bool',   None),
+    ('MOR. 1Pl Ind. Pron.',                   'independent pronoun 1.pl نحن',         'select', ['niḥna', 'iḥna']),
+    ('3Pl Ind. Pron.',                        'independent pronoun 3.pl هم',          'select', ['hinne/hinne', 'hunne', 'hunni', 'humme/homme', 'hum/hom']),
+    ('2.m.pl pron. كم-',                       '2.m.pl pron. كم-',                     'select', ['-ku/-ko', '-kum/-kom', '-čin']),
+    ('3.m.pl (poss. pro) هم-',                 '3.m.pl (poss. pro) هم-',               'select', ['-h- > -∅- (e.g. -on)', '-hum/-hom', '-hin/-hen']),
+    ('3.f.sg pron. ها-',                       '3.f.sg pron. ها-',                     'select', ['-a', '-a / -ya (after -i-)', '-ha',
+                                                                                                   '-a; -ha only after -ū-',
+                                                                                                   '-a; -ha only after -ū- / -i-', '-hä#/-he#']),
+    ('impf. prefix 3.m.sg',                   'impf. prefix 3.m.sg',                  'select', ['bi-', 'byi-', 'yi-']),
+    ('"want"',                                '"want"',                               'select', ['badd', 'bidd', 'widd']),
+    ('LEX. "when?"',                          '"when?"',                              'select', ['ēmta', 'wēnta', 'wagtēš']),
+    ('LEX."here"',                            '"here"',                               'select', ['hōn', 'hīn', 'hān', 'hina']),
+    ('SYN. Past Con. Mod.',                   'past continuous modifier',             'select', ['kān', 'kān / čān', 'baka~biki / yibki~yibka',
+                                                                                                  'baka/biki', 'baka~biki / yikbi~yikba', 'baʾa']),
+    ('LEX. "He is saying"',                   '"he is saying"',                       'select', ['biʾūl']),
+    ('LEX. "Rooster/Roosters"',               '"rooster/roosters"',                   'select', ['dīk / dyūk']),
+    ('LEX. "Heavy"',                          '"heavy"',                              'select', ['tʾīl']),
+    ('LEX. "now"',                            '"now"',                               'select', ['issa/hassāʿa', 'hallaʾ/halʾēt/halkēt/halgēt', 'alḥīn']),
+    ('LEX. "Coffee"',                         '"coffee"',                             'select', ['ʾahwi']),
 ]
 
 # Sentinel shown as a selectable value for every 'select'-type feature in
@@ -1363,8 +1361,10 @@ DOC_ONLY_FEATURES: list[str] = [
     'Anticipatory pronominal suffix',
 ]
 
-# Map from feature display_name → FEATURE_DEFS entry (for fast lookup)
-_FEAT_BY_NAME: dict = {fd[2]: fd for fd in FEATURE_DEFS}
+# NOTE: FEATURE_DEFS itself and the _FEAT_BY_NAME lookup built from it are
+# defined further below (right after get_column_indices()), once the helper
+# functions that resolve header text against the live sheet are available —
+# see get_feature_defs().
 
 
 @st.cache_resource
@@ -1449,22 +1449,273 @@ def _extract_doc_id(url: str) -> str | None:
     return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_column_indices() -> dict:
+def _col_letter(idx0: int) -> str:
     """
-    Reads only the header row of the Recordings sheet and returns a dict
-    mapping each COL_NAMES key to its 0-based column index.
-    If a column header isn't found, its value is None.
-    Cached for 10 minutes — same TTL as the corpus.
+    Convert a 0-based column index to its A1 column letter(s), e.g.
+    0 → 'A', 25 → 'Z', 26 → 'AA', 40 → 'AO'. There's no openpyxl import in
+    this file (the spreadsheet is read purely via the Sheets API as plain
+    values), so this small helper stands in for openpyxl's
+    get_column_letter() wherever a 0-based index needs to become an A1 letter.
+    """
+    n = idx0 + 1
+    letters = ''
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_sheet_headers() -> list[str]:
+    """
+    Read just the header row (row 1) of the Recordings sheet. Shared by
+    get_column_indices() and get_feature_defs() so both resolve column
+    positions dynamically from the LIVE header text without each making its
+    own duplicate Sheets API call. Cached for 1 hour.
     """
     _, _, sheets_svc = get_services()
     result = sheets_svc.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range='Recordings!1:1',
     ).execute()
-    headers = (result.get('values') or [[]])[0]
+    return (result.get('values') or [[]])[0]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_column_indices() -> dict:
+    """
+    Returns a dict mapping each COL_NAMES key to its 0-based column index in
+    the live Recordings sheet. If a column header isn't found, its value is
+    None. Cached for 1 hour.
+    """
+    headers = _get_sheet_headers()
     header_map = {h: i for i, h in enumerate(headers)}
     return {key: header_map.get(name) for key, name in COL_NAMES.items()}
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  DYNAMIC FEATURE-COLUMN RESOLUTION
+# ════════════════════════════════════════════════════════════════════════════════
+# Every place in this app that needs a feature's spreadsheet column (tagging,
+# searching, reading, writing, the Google-Doc FEATURES section, …) goes
+# through the module-level FEATURE_DEFS list below, NOT through a hardcoded
+# column letter. FEATURE_DEFS is rebuilt by get_feature_defs() — which is
+# called once at module load (see the `FEATURE_DEFS = get_feature_defs()`
+# assignment further down) and again on every Streamlit rerun once its cache
+# TTL expires — by matching each known feature's *header text* against the
+# live header row, via _get_sheet_headers(). This is the same "resolve by
+# header text, not by position" pattern get_column_indices() already used for
+# non-feature columns, now extended to cover features too.
+
+APP_FEATURES_SHEET_NAME = "AppFeatureDefs"
+_APP_FEATURES_HEADER = ['header_text', 'display_name', 'type', 'options']
+
+
+def _ensure_app_features_sheet() -> None:
+    """
+    Make sure a dedicated 'AppFeatureDefs' tab exists in the spreadsheet, for
+    feature columns users register from the sidebar "➕ Add a feature column"
+    control (see add_app_feature_def()). Creates it with a header row if it
+    doesn't exist yet. Safe to call repeatedly — a no-op once the tab exists.
+    """
+    _, _, sheets_svc = get_services()
+    meta = sheets_svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    titles = {s['properties']['title'] for s in meta.get('sheets', [])}
+    if APP_FEATURES_SHEET_NAME in titles:
+        return
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={'requests': [{'addSheet': {'properties': {'title': APP_FEATURES_SHEET_NAME}}}]},
+    ).execute()
+    sheets_svc.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{APP_FEATURES_SHEET_NAME}!A1",
+        valueInputOption='RAW',
+        body={'values': [_APP_FEATURES_HEADER]},
+    ).execute()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_extra_feature_defs() -> list[tuple]:
+    """
+    Read user-added feature definitions from the 'AppFeatureDefs' tab (rows
+    written by add_app_feature_def(), via the sidebar control). Each row is
+    (header_text, display_name, type, options) — options is None for 'bool'
+    features or a list parsed from a '; '-separated string for 'select'
+    features. Returns [] if the tab doesn't exist yet or has no data rows.
+    Cached for 10 minutes so a freshly-added feature shows up quickly.
+    """
+    _, _, sheets_svc = get_services()
+    try:
+        result = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{APP_FEATURES_SHEET_NAME}!A2:D",
+        ).execute()
+    except Exception:
+        return []   # tab doesn't exist yet — nothing has been added
+    rows = result.get('values') or []
+    out = []
+    for row in rows:
+        row = row + [''] * (4 - len(row))
+        header_text, display_name, ftype, options_raw = (c.strip() if isinstance(c, str) else c for c in row[:4])
+        if not header_text:
+            continue
+        ftype = ftype or 'bool'
+        options = [o.strip() for o in options_raw.split(';') if o.strip()] if ftype == 'select' else None
+        out.append((header_text, display_name or header_text, ftype, options))
+    return out
+
+
+def add_app_feature_def(header_text: str, display_name: str, ftype: str, options: list[str] | None) -> None:
+    """
+    Register a new feature column — typically one a user manually added to
+    the live Recordings sheet — by appending a row to the 'AppFeatureDefs'
+    tab (creating that tab first if needed). After calling this, clear
+    get_extra_feature_defs and get_feature_defs (and rerun) so the new
+    feature is picked up immediately.
+    """
+    _ensure_app_features_sheet()
+    _, _, sheets_svc = get_services()
+    options_str = '; '.join(options) if options else ''
+    sheets_svc.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{APP_FEATURES_SHEET_NAME}!A1",
+        valueInputOption='RAW',
+        insertDataOption='INSERT_ROWS',
+        body={'values': [[header_text.strip(), display_name.strip(), ftype.strip(), options_str]]},
+    ).execute()
+
+
+def remove_app_feature_def(header_text: str) -> bool:
+    """
+    Remove a previously user-added feature (by header_text) from the
+    'AppFeatureDefs' tab. Used by the sidebar's delete control for undoing a
+    mistaken addition. Returns True if a row was removed, False if the tab
+    doesn't exist or no matching row was found.
+    """
+    _, _, sheets_svc = get_services()
+    try:
+        result = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{APP_FEATURES_SHEET_NAME}!A1:D",
+        ).execute()
+    except Exception:
+        return False
+    rows = result.get('values') or []
+    target = header_text.strip()
+    keep = [rows[0]] if rows else [_APP_FEATURES_HEADER]
+    removed = False
+    for row in rows[1:]:
+        if row and row[0].strip() == target and not removed:
+            removed = True
+            continue
+        keep.append(row)
+    if not removed:
+        return False
+    sheets_svc.spreadsheets().values().clear(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{APP_FEATURES_SHEET_NAME}!A1:D",
+    ).execute()
+    sheets_svc.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{APP_FEATURES_SHEET_NAME}!A1",
+        valueInputOption='RAW',
+        body={'values': keep},
+    ).execute()
+    return True
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_feature_defs() -> list[tuple]:
+    """
+    Resolve FEATURE_HEADER_DEFS (built-in) plus get_extra_feature_defs()
+    (user-added, via the sidebar) against the LIVE header row of the
+    Recordings sheet, and return the legacy 5-tuple shape
+    (col_index, col_letter, display_name, type, options) that every existing
+    feature-consumer in this file expects — fd[1]=col_letter, fd[2]=display
+    name, fd[3]=type, fd[4]=options. (fd[0] itself is a 1-based index kept
+    only for shape-compatibility; nothing in this file actually reads it.)
+
+    This is the dynamic replacement for the old hardcoded/positional
+    FEATURE_DEFS: instead of assuming fixed column letters, each feature's
+    *header text* is matched (exact, whitespace-stripped) against the
+    sheet's actual current header row every time this resolves, so the app
+    keeps working correctly even if columns are inserted, removed, or
+    reordered — which is exactly what caused the 2026-06-22 "ق=q shows no
+    results" bug this replaces. A feature whose header text can no longer be
+    found (renamed/removed again) is silently dropped from the resolved
+    list — see get_unresolved_features() to surface that to the user instead
+    of it just vanishing unnoticed.
+
+    Cached for 10 minutes. Called once at module load to populate the
+    FEATURE_DEFS global (see `FEATURE_DEFS = get_feature_defs()` below), and
+    transparently again on every script rerun once the cache expires — i.e.
+    "each time the app loads the data... it uses this list to look for the
+    right column."
+    """
+    headers = _get_sheet_headers()
+    header_map = {h.strip(): i for i, h in enumerate(headers)}
+
+    all_defs = list(FEATURE_HEADER_DEFS) + list(get_extra_feature_defs())
+    resolved = []
+    for header_text, display_name, ftype, options in all_defs:
+        idx0 = header_map.get(header_text.strip())
+        if idx0 is None:
+            continue
+        resolved.append((idx0 + 1, _col_letter(idx0), display_name, ftype, options))
+    return resolved
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_unresolved_features() -> list[str]:
+    """
+    Display names of built-in or user-added features whose header text could
+    NOT be found in the live Recordings header row right now (e.g. the
+    column was renamed or deleted since it was registered). Meant to be
+    surfaced in the sidebar so this is noticed immediately instead of a
+    feature silently vanishing from search/tagging.
+    """
+    headers = _get_sheet_headers()
+    header_set = {h.strip() for h in headers}
+    all_defs = list(FEATURE_HEADER_DEFS) + list(get_extra_feature_defs())
+    return [display_name for header_text, display_name, *_ in all_defs
+            if header_text.strip() not in header_set]
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_unclaimed_headers() -> list[str]:
+    """
+    Live Recordings header texts that aren't already claimed by a known
+    feature (FEATURE_HEADER_DEFS or a previously user-added one) or by a
+    known non-feature metadata column (COL_NAMES). These are the candidates
+    offered in the sidebar's "➕ Add a feature column" picker when someone has
+    manually added a new column to the sheet that the app doesn't know about
+    yet.
+    """
+    headers = _get_sheet_headers()
+    claimed = {h.strip() for h, *_ in FEATURE_HEADER_DEFS}
+    claimed |= {h.strip() for h, *_ in get_extra_feature_defs()}
+    claimed |= {v.strip() for v in COL_NAMES.values()}
+    return [h for h in headers if h.strip() and h.strip() not in claimed]
+
+
+# Resolve the live feature list now (and again each cache window on every
+# rerun) — this is THE list every consumer in this file reads from.
+# Wrapped defensively: this now makes a live Sheets API call unconditionally
+# at script load (unlike the old static literal, which couldn't fail). A
+# transient API/network error here should degrade to "no features resolved
+# this rerun" rather than crashing the entire app before it can render
+# anything — st.cache_data will simply retry on the next rerun.
+try:
+    FEATURE_DEFS: list[tuple] = get_feature_defs()
+except Exception as _feat_defs_err:
+    FEATURE_DEFS = []
+    _FEATURE_DEFS_LOAD_ERROR = str(_feat_defs_err)
+else:
+    _FEATURE_DEFS_LOAD_ERROR = None
+
+# Map from feature display_name → FEATURE_DEFS entry (for fast lookup)
+_FEAT_BY_NAME: dict = {fd[2]: fd for fd in FEATURE_DEFS}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1673,37 +1924,43 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_all_sheet_features(version: int = 0) -> dict:
     """
-    Read the ENTIRE feature range (columns O–AO, all rows) in ONE API call and
-    return {sheet_row: {col_letter: value}}.  Cached for 1 hour; pass a different
+    Read every feature column (all rows) and return
+    {sheet_row: {col_letter: value}}. Cached for 1 hour; pass a different
     version to bust the cache after a write.
 
-    IMPORTANT: this relies on FEATURE_DEFS being gapless and in the same
-    left-to-right order as the live sheet's actual columns — values are
-    matched up by *position* (enumerate(FEATURE_DEFS)), not by re-reading
-    headers. If the sheet is reorganized again, FEATURE_DEFS must be
-    re-verified against the live header row (see the NOTE above its
-    definition) or reads/writes will silently land on the wrong column again.
+    Each feature is read via its OWN open-ended column range (e.g.
+    'Recordings!V2:V'), all fetched together in a single batchGet call —
+    rather than one contiguous range indexed by position, like the old
+    implementation. This is deliberate: FEATURE_DEFS is now resolved
+    dynamically by header text (see get_feature_defs()) and is no longer
+    guaranteed to be a gapless, left-to-right-ordered block of columns —
+    features can live anywhere in the sheet, including a brand-new column a
+    user just added via the sidebar. Reading per-column by resolved letter
+    keeps this correct regardless of layout.
     """
     _, _, sheets_svc = get_services()
-    first_col, last_col = FEATURE_DEFS[0][1], FEATURE_DEFS[-1][1]   # 'O', 'AO'
-    range_a1 = f"Recordings!{first_col}2:{last_col}"   # row 2 onward (skip header)
-    result = sheets_svc.spreadsheets().values().get(
+    if not FEATURE_DEFS:
+        return {}
+    ranges = [f"Recordings!{fd[1]}2:{fd[1]}" for fd in FEATURE_DEFS]
+    result = sheets_svc.spreadsheets().values().batchGet(
         spreadsheetId=SPREADSHEET_ID,
-        range=range_a1,
+        ranges=ranges,
         valueRenderOption='UNFORMATTED_VALUE',
     ).execute()
-    raw_rows = result.get('values') or []
-    out = {}
-    for i, row_vals in enumerate(raw_rows):
-        sheet_row = i + 2   # spreadsheet row index (1-based, header = row 1)
-        row_out = {}
-        for j, fd in enumerate(FEATURE_DEFS):
-            val = row_vals[j] if j < len(row_vals) else None
-            if fd[3] == 'bool':
-                row_out[fd[1]] = bool(val) if val is not None else None
+    value_ranges = result.get('valueRanges', [])
+
+    out: dict = {}
+    for fd, vr in zip(FEATURE_DEFS, value_ranges):
+        col_letter, ftype = fd[1], fd[3]
+        rows = vr.get('values') or []
+        for i, row_vals in enumerate(rows):
+            sheet_row = i + 2   # spreadsheet row index (1-based, header = row 1)
+            val = row_vals[0] if row_vals else None
+            row_out = out.setdefault(sheet_row, {})
+            if ftype == 'bool':
+                row_out[col_letter] = bool(val) if val is not None else None
             else:
-                row_out[fd[1]] = str(val) if val else None
-        out[sheet_row] = row_out
+                row_out[col_letter] = str(val) if val else None
     return out
 
 
@@ -2535,6 +2792,103 @@ with st.sidebar:
         st.session_state.pop('_corpus_for_sidebar', None)
         st.rerun()
 
+    # Moved here (2026-06-22) from the main search page, where it sat right
+    # under the advanced filters and was getting clicked by mistake — see
+    # the note above add_app_feature_def(). This one does a full
+    # st.cache_data.clear() (every cached function, not just the
+    # corpus/column-index ones the button above targets).
+    if st.button("↺ Clear cache & reload", key="sidebar_clear_cache",
+                 help="Force a full reload of everything from Google Sheets/Docs"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown("### 🧬 Feature columns")
+    _unresolved = get_unresolved_features()
+    if _unresolved:
+        st.warning(
+            "These features' columns weren't found in the live sheet right "
+            "now (renamed or removed?): " + ", ".join(_unresolved)
+        )
+    with st.expander("➕ Add a feature column"):
+        st.caption(
+            "If someone added a new feature column directly in the "
+            "spreadsheet, register it here so the app can tag/search it too."
+        )
+        _unclaimed = get_unclaimed_headers()
+        _CUSTOM_OPT = "✏️ Type a custom header name…"
+        _header_choice = st.selectbox(
+            "Spreadsheet column header",
+            options=(_unclaimed + [_CUSTOM_OPT]) if _unclaimed else [_CUSTOM_OPT],
+            key="addfeat_header_choice",
+            help="Columns in the live sheet not yet tracked as a feature "
+                 "(or known metadata column) appear here automatically.",
+        )
+        if _header_choice == _CUSTOM_OPT:
+            _header_text = st.text_input(
+                "Exact header text (must match the spreadsheet cell exactly)",
+                key="addfeat_header_custom",
+            )
+        else:
+            _header_text = _header_choice
+
+        _display_name = st.text_input(
+            "Display name in the app",
+            value=_header_text if _header_text else "",
+            key="addfeat_display_name",
+        )
+        _ftype_label = st.radio(
+            "Feature type",
+            options=["Yes / No (checkbox)", "Multiple choice (pick one value)"],
+            key="addfeat_type",
+            horizontal=False,
+        )
+        _ftype = 'bool' if _ftype_label.startswith("Yes") else 'select'
+        _options: list[str] = []
+        if _ftype == 'select':
+            _options_raw = st.text_area(
+                "Allowed values (one per line, or comma-separated)",
+                key="addfeat_options",
+            )
+            _options = [o.strip() for o in re.split(r'[,\n]', _options_raw) if o.strip()]
+
+        if st.button("Add feature", key="addfeat_submit"):
+            if not _header_text or not _header_text.strip():
+                st.error("Enter or pick the spreadsheet column header text.")
+            elif _ftype == 'select' and not _options:
+                st.error("Add at least one allowed value for a multiple-choice feature.")
+            else:
+                try:
+                    add_app_feature_def(
+                        header_text=_header_text,
+                        display_name=_display_name.strip() or _header_text.strip(),
+                        ftype=_ftype,
+                        options=_options or None,
+                    )
+                    get_extra_feature_defs.clear()
+                    get_feature_defs.clear()
+                    get_unresolved_features.clear()
+                    get_unclaimed_headers.clear()
+                    st.success(f"Added “{_display_name or _header_text}”. Reloading…")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Couldn't add feature: {_e}")
+
+        _extra_defs = get_extra_feature_defs()
+        if _extra_defs:
+            st.markdown("**User-added features:**")
+            for _hdr, _disp, _ft, _opts in _extra_defs:
+                _col_a, _col_b = st.columns([5, 1])
+                with _col_a:
+                    st.caption(f"{_disp}  ·  _{_hdr}_  ·  {_ft}")
+                with _col_b:
+                    if st.button("🗑️", key=f"addfeat_del_{_hdr}", help="Remove this feature"):
+                        if remove_app_feature_def(_hdr):
+                            get_extra_feature_defs.clear()
+                            get_feature_defs.clear()
+                            get_unresolved_features.clear()
+                            get_unclaimed_headers.clear()
+                            st.rerun()
+
     with st.expander("🔧 Debug: inspect corpus row"):
         _dbg_q = st.text_input("Row name or doc ID to inspect", key="dbg_row_q",
                                 placeholder="e.g. BĠr.1F.R27")
@@ -2874,10 +3228,10 @@ with mid:
         }
         name_filter = ''  # removed; kept as empty string for backward compat
 
-    # Clear-cache utility button (small, tucked below advanced options)
-    if st.button("↺  Clear cache & reload", help="Force reload corpus from Google Sheets"):
-        st.cache_data.clear()
-        st.rerun()
+    # NOTE: the "Clear cache & reload" button used to live here. Users kept
+    # clicking it by mistake while working with the filters above it, so
+    # it's been moved into the sidebar (the "<<" panel) — see the
+    # "↺ Clear cache & reload" button under "### 🧬 Feature columns" there.
 
 
 # ── Bridge component: listens for right-click tags from document iframes ──────
