@@ -1305,6 +1305,23 @@ FEATURE_DEFS: list[tuple] = [
                                                                   'baka/biki', 'baka~biki / yikbi~yikba']),
 ]
 
+# Sentinel shown as a selectable value for every 'select'-type feature in
+# Feature Browse mode, letting the user search for documents where that
+# feature's spreadsheet column is empty (i.e. not yet tagged), rather than
+# only being able to filter for one of the predefined tag values.
+FEAT_NONE_OPTION = '— None (not tagged) —'
+
+
+def _feat_val_norm(v) -> str:
+    """
+    Normalize a feature value for comparison: Unicode NFC-normalize, trim
+    surrounding whitespace, and lowercase. Used so that a value typed into
+    the spreadsheet that *looks* identical to one of the FEATURE_DEFS option
+    strings (e.g. a precomposed vs. decomposed diacritic, stray spaces, or a
+    capitalization difference) still matches the selected dropdown value.
+    """
+    return unicodedata.normalize('NFC', str(v or '')).strip().lower()
+
 # Features that appear in the doc FEATURES section but are NOT in the M-AI spreadsheet columns
 DOC_ONLY_FEATURES: list[str] = [
     'long particles',
@@ -2652,8 +2669,11 @@ with mid:
                 if _fd[3] == 'bool':
                     _feat_conditions.append((_sf, _fd, True))
                 else:
+                    # "— None (not tagged) —" lets the user search for documents
+                    # where this feature column is empty, instead of only being
+                    # able to pick one of the predefined tag values.
                     _v = st.selectbox(
-                        f"Value — {_sf}", _fd[4] or [],
+                        f"Value — {_sf}", [FEAT_NONE_OPTION] + (_fd[4] or []),
                         key=f"feat_browse_val_{_sf}",
                         label_visibility="visible",
                     )
@@ -3195,6 +3215,11 @@ if st.session_state.get('_feat_search') and corpus:
     with st.spinner("Reading feature values from spreadsheet…"):
         _feat_rows = []
         _seen_fids = set()
+        # For each select-type condition, remember every distinct raw value
+        # actually seen in that spreadsheet column across the filtered corpus —
+        # used purely as a diagnostic if the search comes back empty, so the
+        # user can see what's really in the sheet vs. what the dropdown expects.
+        _seen_col_vals: dict = {_fn: set() for _fn, _fd, _fv in _feat_conditions if _fd[3] != 'bool'}
         _filtered_corpus = _apply_filters(corpus, active_filters)
         for _doc in _filtered_corpus:
             if _doc['doc_id'] in _seen_fids:
@@ -3210,10 +3235,20 @@ if st.session_state.get('_feat_search') and corpus:
             _matched_vals = {}
             for _fn, _fd, _fv in _feat_conditions:
                 _cur = _fvals.get(_fd[1])
-                _hit = (
-                    bool(_cur) is True if _fd[3] == 'bool'
-                    else str(_cur or '').strip() == str(_fv).strip()
-                )
+                if _fn in _seen_col_vals and str(_cur or '').strip():
+                    _seen_col_vals[_fn].add(str(_cur).strip())
+                if _fd[3] == 'bool':
+                    _hit = bool(_cur) is True
+                elif _fv == FEAT_NONE_OPTION:
+                    # "None" = the spreadsheet column is empty / not yet tagged
+                    _hit = not str(_cur or '').strip()
+                else:
+                    # Compare normalized (NFC, case/whitespace-insensitive) so that
+                    # diacritic encoding differences between the dropdown option
+                    # strings and hand-entered spreadsheet text (e.g. composed vs.
+                    # decomposed Unicode for ǧ/ḏ̣-type characters) don't cause a
+                    # false "no match" for values that look identical on screen.
+                    _hit = _feat_val_norm(_cur) == _feat_val_norm(_fv)
                 _cond_results.append(_hit)
                 _matched_vals[_fn] = _cur
 
@@ -3231,6 +3266,16 @@ if st.session_state.get('_feat_search') and corpus:
     if not _feat_rows:
         _desc = f" {_logic} ".join(f"{n}={'✓' if d[3]=='bool' else v}" for n,d,v in _feat_conditions)
         st.info(f"No documents found matching: {_desc}")
+        # Diagnostic: show what's actually in the spreadsheet for each
+        # select-type column searched, so a value typed/stored differently
+        # than the dropdown option (typo, extra spaces, different spelling)
+        # is immediately visible instead of looking like a silent failure.
+        for _fn, _vals_seen in _seen_col_vals.items():
+            if _vals_seen:
+                st.caption(
+                    f"ℹ️ Values actually found in the **{_fn}** column for the "
+                    f"documents searched: {', '.join(sorted(_vals_seen))}"
+                )
     else:
         st.caption(f"{len(_feat_rows)} document(s) found")
 
@@ -3275,6 +3320,11 @@ if st.session_state.get('_feat_search') and corpus:
             key='dl_feat_results',
         )
 
+        # Map doc_id → all sheet rows (handles recordings split across multiple rows)
+        _feat_doc_id_to_rows: dict = {}
+        for _cdoc in corpus:
+            _feat_doc_id_to_rows.setdefault(_cdoc['doc_id'], []).append(_cdoc['sheet_row'])
+
         # ── Display each tagged document ──────────────────────────────────────
         for _fr in _feat_rows:
             _meta = ' · '.join(filter(None, [_fr['village'], _fr['community']]))
@@ -3283,6 +3333,43 @@ if st.session_state.get('_feat_search') and corpus:
                 for fn, v in _fr['values'].items() if v
             )
             with st.expander(f"📄  {_fr['name']}   ·   {_meta}   |  {_vals_str}  |" if _vals_str else f"📄  {_fr['name']}   ·   {_meta}"):
+                # Document viewer — loaded on demand (same pattern as the main
+                # search results), so the actual transcription text is shown
+                # inline instead of only a "Open in Google Docs" link.
+                _fb_load_key = f"_feat_load_doc_{_fr['doc_id']}"
+                if st.session_state.get(_fb_load_key):
+                    with st.spinner("Loading document…"):
+                        try:
+                            _fb_doc_ver = st.session_state.get('_doc_versions', {}).get(_fr['doc_id'], 0)
+                            _fb_content = get_doc_content(_fr['doc_id'], version=_fb_doc_ver)
+                            _fb_sk = f"feat_{_fr['doc_id']}"
+                            _fb_pw = st.session_state.get(f"{_fb_sk}_pending_words", {})
+                            _fb_sw = st.session_state.get(f"{_fb_sk}_saved_words", {})
+                            _fb_tagged = list(dict.fromkeys(
+                                w for words in list(_fb_pw.values()) + list(_fb_sw.values())
+                                for w in (words if isinstance(words, list) else [words])
+                                if w
+                            ))
+                            _fb_ihtml = inject_interaction_js(_fb_content['display_html'], _fr['doc_id'], [], _fb_tagged)
+                            import warnings
+                            with warnings.catch_warnings():
+                                warnings.simplefilter("ignore")
+                                components.html(_fb_ihtml, height=580, scrolling=True)
+                        except Exception as e:
+                            st.error(f"Could not load document: {e}")
+                else:
+                    st.button(
+                        "📖 Load document", key=f"feat_btn_load_{_fr['doc_id']}",
+                        on_click=lambda k=_fb_load_key: st.session_state.update({k: True}),
+                    )
+
+                # ── Submit bar (feature tags staged via right-click) ────────────
+                _fb_all_rows = _feat_doc_id_to_rows.get(
+                    _fr['doc_id'], [_fr['sheet_row']] if _fr.get('sheet_row') else []
+                )
+                if _fb_all_rows:
+                    _render_submit_bar(_fr['doc_id'], _fr['name'], _fb_all_rows)
+
                 st.markdown(
                     f"[Open in Google Docs ↗](https://docs.google.com/document/d/{_fr['doc_id']}/edit)"
                 )
