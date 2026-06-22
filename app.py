@@ -2882,10 +2882,16 @@ if search_clicked and _is_searching:
     search_clicked = False
 
 if search_clicked and pattern_input.strip() and corpus:
-    # Root mode: expand root letters to $-pattern (position already set to 'anywhere')
+    # Root mode: pattern_input was ALREADY expanded to a $-wildcard pattern by
+    # the root-mode UI block above (search_mode == 'root' branch around the
+    # search bar) — that block ran earlier in this same script execution.
+    # Do NOT call root_to_pattern() again here: doing so double-expanded an
+    # already-expanded pattern (e.g. "$k$t$b$" -> "$$k$$t$$b$$"), producing a
+    # much heavier, semantically-wrong regex (long chains of ".*?") that was
+    # then matched unanchored across the entire corpus — the cause of root
+    # search hanging/crashing the app.
     _effective_pattern = pattern_input.strip()
     if search_mode == 'root':
-        _effective_pattern = root_to_pattern(_effective_pattern)
         search_mode = 'transcription'  # use transcription search internally
     st.session_state['_searching'] = True
     st.session_state['_search_start_ts'] = time.time()
