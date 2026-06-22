@@ -1276,33 +1276,56 @@ def _status_badge(status: str) -> str:
 
 # ── Feature column definitions: (1-based col, col_letter, display_name, type, options) ──
 # type: 'bool' = checkbox  |  'select' = fixed options  |  'text' = free text
+# ──────────────────────────────────────────────────────────────────────────────
+# NOTE (2026-06-22): the live "Recordings" sheet was reorganized — two new
+# non-feature columns were inserted before the feature block (now M/N =
+# 'תוכן ההקלטה' / 'תופעות בהקלטה'), most feature headers were renamed (e.g.
+# 'ق' → 'PHON. *q'), the "now" feature was relocated to the very end of the
+# block, the old "was" feature has no current column (retired — see below),
+# and 5 new feature columns were appended at the tail (AJ–AO). The block below
+# reflects the CURRENT live layout, columns O through AO, verified directly
+# against the user's freshly uploaded corpus snapshot. The column letters here
+# are positional (read/write code below pulls one contiguous range and indexes
+# into it by position) — if the sheet is ever reorganized again, this list
+# will need to be re-verified against the live header row the same way.
+# Display names are intentionally kept the SAME as before for any feature that
+# merely moved (not renamed in spirit) — changing them would orphan existing
+# "FEATURES:" lines already written into Google Docs, since those are matched
+# by display-name text, not by spreadsheet header text.
 FEATURE_DEFS: list[tuple] = [
-    (13, 'M',  'aCC>iCC',                              'bool',   None),
-    (14, 'N',  'diphthongs',                           'bool',   None),
-    (15, 'O',  'fem. ending',                          'select', ['-i', '-e', '-a', 'pausal']),
-    (16, 'P',  'med. Imāla',                           'bool',   None),
-    (17, 'Q',  '-a+n (Aram. sub.)',                    'bool',   None),
-    (18, 'R',  'pausal -u>-o#, -i>-e#',               'bool',   None),
-    (19, 'S',  'ج',                                    'select', ['ž', 'ǧ', 'conditioned']),
-    (20, 'T',  'ق',                                    'select', ['q', 'ʾ', 'g', 'k', 'g/ǧ/k (conditioned)']),
-    (21, 'U',  'assimilation of gutturals to the left','bool',   None),
-    (22, 'V',  'vowel epenthesis',                     'select', ['*CCC > CvCC', '*CCC > CCvC']),
-    (23, 'W',  'vocal harmonizing',                    'bool',   None),
-    (24, 'X',  'lowering of -uC>-oC/-iC>-eC',         'bool',   None),
-    (25, 'Y',  'independent pronoun 1.pl نحن',         'select', ['niḥna', 'iḥna']),
-    (26, 'Z',  'independent pronoun 3.pl هم',          'select', ['hinne/hinne', 'hunne', 'hunni', 'humme/homme', 'hum/hom']),
-    (27, 'AA', '2.m.pl pron. كم-',                     'select', ['-ku/-ko', '-kum/-kom', '-čin']),
-    (28, 'AB', '3.m.pl (poss. pro) هم-',               'select', ['-h- > -∅- (e.g. -on)', '-hum/-hom', '-hin/-hen']),
-    (29, 'AC', '3.f.sg pron. ها-',                     'select', ['-a', '-a / -ya (after -i-)', '-ha',
+    (15, 'O',  'aCC>iCC',                              'bool',   None),
+    (16, 'P',  'diphthongs',                           'bool',   None),
+    (17, 'Q',  'fem. ending',                          'select', ['-i', '-e', '-a', 'pausal']),
+    (18, 'R',  'med. Imāla',                           'bool',   None),
+    (19, 'S',  '-a+n (Aram. sub.)',                    'bool',   None),
+    (20, 'T',  'pausal -u>-o#, -i>-e#',               'bool',   None),
+    (21, 'U',  'ج',                                    'select', ['ž', 'ǧ', 'conditioned']),
+    (22, 'V',  'ق',                                    'select', ['q', 'ʾ', 'g', 'k', 'g/ǧ/k (conditioned)']),
+    (23, 'W',  'assimilation of gutturals to the left','bool',   None),
+    (24, 'X',  'vowel epenthesis',                     'select', ['*CCC > CvCC', '*CCC > CCvC']),
+    (25, 'Y',  'vocal harmonizing',                    'bool',   None),
+    (26, 'Z',  'lowering of -uC>-oC/-iC>-eC',         'bool',   None),
+    (27, 'AA', 'independent pronoun 1.pl نحن',         'select', ['niḥna', 'iḥna']),
+    (28, 'AB', 'independent pronoun 3.pl هم',          'select', ['hinne/hinne', 'hunne', 'hunni', 'humme/homme', 'hum/hom']),
+    (29, 'AC', '2.m.pl pron. كم-',                     'select', ['-ku/-ko', '-kum/-kom', '-čin']),
+    (30, 'AD', '3.m.pl (poss. pro) هم-',               'select', ['-h- > -∅- (e.g. -on)', '-hum/-hom', '-hin/-hen']),
+    (31, 'AE', '3.f.sg pron. ها-',                     'select', ['-a', '-a / -ya (after -i-)', '-ha',
                                                                    '-a; -ha only after -ū-',
                                                                    '-a; -ha only after -ū- / -i-', '-hä#/-he#']),
-    (30, 'AD', 'impf. prefix 3.m.sg',                  'select', ['bi-', 'byi-', 'yi-']),
-    (31, 'AE', '"want"',                               'select', ['badd', 'bidd', 'widd']),
-    (32, 'AF', '"now"',                                'select', ['issa/hassāʿa', 'hallaʾ/halʾēt/halkēt/halgēt', 'alḥīn']),
-    (33, 'AG', '"when?"',                              'select', ['ēmta', 'wēnta', 'wagtēš']),
-    (34, 'AH', '"here"',                               'select', ['hōn', 'hīn', 'hān', 'hina']),
-    (35, 'AI', '"was"',                                'select', ['kān', 'kān / čān', 'baka~biki / yibki~yibka',
-                                                                  'baka/biki', 'baka~biki / yikbi~yikba']),
+    (32, 'AF', 'impf. prefix 3.m.sg',                  'select', ['bi-', 'byi-', 'yi-']),
+    (33, 'AG', '"want"',                               'select', ['badd', 'bidd', 'widd']),
+    (34, 'AH', '"when?"',                              'select', ['ēmta', 'wēnta', 'wagtēš']),
+    (35, 'AI', '"here"',                               'select', ['hōn', 'hīn', 'hān', 'hina']),
+    # New (2026-06-22): distinct from the old "was" feature, which has no
+    # current spreadsheet column — see NOTE above and the retirement comment
+    # below DOC_ONLY_FEATURES.
+    (36, 'AJ', 'past continuous modifier',             'select', ['kān', 'kān / čān', 'baka~biki / yibki~yibka',
+                                                                  'baka/biki', 'baka~biki / yikbi~yikba', 'baʾa']),
+    (37, 'AK', '"he is saying"',                       'select', ['biʾūl']),
+    (38, 'AL', '"rooster/roosters"',                   'select', ['dīk / dyūk']),
+    (39, 'AM', '"heavy"',                              'select', ['tʾīl']),
+    (40, 'AN', '"now"',                                'select', ['issa/hassāʿa', 'hallaʾ/halʾēt/halkēt/halgēt', 'alḥīn']),
+    (41, 'AO', '"coffee"',                             'select', ['ʾahwi']),
 ]
 
 # Sentinel shown as a selectable value for every 'select'-type feature in
@@ -1322,8 +1345,16 @@ def _feat_val_norm(v) -> str:
     """
     return unicodedata.normalize('NFC', str(v or '')).strip().lower()
 
-# Features that appear in the doc FEATURES section but are NOT in the M-AI spreadsheet columns
+# Features that appear in the doc FEATURES section but are NOT in the O-AO spreadsheet columns.
+# '"was"' is intentionally included here (rather than in FEATURE_DEFS): the live
+# sheet's reorganization on 2026-06-22 dropped its dedicated column (the new AJ
+# column is a distinct "past continuous modifier" feature per Noam, not a renamed
+# "was"). Listing it here means any existing "was  [...]" line already written
+# into a Google Doc is preserved verbatim on rewrite, instead of being silently
+# dropped — but it can no longer be read from, written to, or tagged via the
+# spreadsheet, since there's nowhere left for it to live.
 DOC_ONLY_FEATURES: list[str] = [
+    '"was"',
     'long particles',
     'sandhi',
     '-a~-ä/-e#',
@@ -1642,12 +1673,19 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_all_sheet_features(version: int = 0) -> dict:
     """
-    Read the ENTIRE feature range (columns M–AI, all rows) in ONE API call and
+    Read the ENTIRE feature range (columns O–AO, all rows) in ONE API call and
     return {sheet_row: {col_letter: value}}.  Cached for 1 hour; pass a different
     version to bust the cache after a write.
+
+    IMPORTANT: this relies on FEATURE_DEFS being gapless and in the same
+    left-to-right order as the live sheet's actual columns — values are
+    matched up by *position* (enumerate(FEATURE_DEFS)), not by re-reading
+    headers. If the sheet is reorganized again, FEATURE_DEFS must be
+    re-verified against the live header row (see the NOTE above its
+    definition) or reads/writes will silently land on the wrong column again.
     """
     _, _, sheets_svc = get_services()
-    first_col, last_col = FEATURE_DEFS[0][1], FEATURE_DEFS[-1][1]   # 'M', 'AI'
+    first_col, last_col = FEATURE_DEFS[0][1], FEATURE_DEFS[-1][1]   # 'O', 'AO'
     range_a1 = f"Recordings!{first_col}2:{last_col}"   # row 2 onward (skip header)
     result = sheets_svc.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -1760,7 +1798,7 @@ def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
 def _build_features_block(sheet_vals: dict, doc_only_vals: dict) -> str:
     """Build the FEATURES text block to write into the Google Doc."""
     lines = ['FEATURES:']
-    # M-AI features (from spreadsheet)
+    # O-AO features (from spreadsheet)
     for fd in FEATURE_DEFS:
         col_l, name, ftype = fd[1], fd[2], fd[3]
         val = sheet_vals.get(col_l)
@@ -1832,9 +1870,11 @@ def update_gdoc_features_section(
             # Detection: content between [] is "words" if it contains non-ASCII
             # characters (Arabic transcription) or is absent from the feature's
             # known option list; otherwise it's treated as a value (old format).
+            matched = False
             for fd in FEATURE_DEFS:
                 if text.startswith(fd[2] + '  ['):
                     existing_lines[fd[2]] = text
+                    matched = True
                     bo = text.find('[')
                     bc = text.find(']', bo)
                     if bo >= 0 and bc >= 0:
@@ -1852,6 +1892,16 @@ def update_gdoc_features_section(
                             # New format: words are inside the bracket
                             existing_examples[fd[1]] = inside
                     break
+            if not matched:
+                # Doc-only feature (no spreadsheet column, e.g. "was" since the
+                # 2026-06-22 sheet reorg) — capture the line verbatim so it
+                # survives the rewrite below unchanged; it's never present in
+                # pending_vals (which is always keyed by col_letter), so it can
+                # only ever be carried through, never edited here.
+                for _don in DOC_ONLY_FEATURES:
+                    if text.startswith(_don + '  ['):
+                        existing_lines[_don] = text
+                        break
 
     # ── Build updated set of lines ─────────────────────────────────────────────
     # Start with all existing lines, then apply pending changes
