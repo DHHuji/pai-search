@@ -288,6 +288,10 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
     Groups    : (x,y,z) = exactly one of the comma-separated alternatives
                 e.g. (q,ʾ)tv matches qtv and ʾtv
                 Each alternative can be a multi-character string or a wildcard.
+                A trailing empty alternative (just leave it blank after the
+                last comma) makes the whole group optional — the letter may
+                be present OR absent entirely.
+                e.g. (q,k,)tb matches qtb, ktb, AND tb (letter dropped).
     """
     pattern = unicodedata.normalize('NFC', pattern)
     anchor_start = pattern.startswith('^')
@@ -353,6 +357,10 @@ def root_to_pattern(root_input: str) -> str:
     'ktb'          → '$k$t$b$'
     '(q,ʾ,k)tv'   → '$(q,ʾ,k)$t$v$'
     'k t b'        → '$k$t$b$'   (spaces ignored)
+
+    A group with a trailing empty alternative, e.g. '(q,k,)tb', makes that
+    letter optional — matches words with q, k, OR neither letter at all
+    (qtb, ktb, and tb all match).
     """
     root_input = unicodedata.normalize('NFC', root_input.strip())
     letters = []
@@ -2552,6 +2560,9 @@ with mid:
           <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
             <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
           </span>
+          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+            <b>(x,y,)</b> = letter optional (may be absent) &nbsp;e.g.&nbsp;<b>(q,k,)tb</b> → qtb / ktb / tb
+          </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
             e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
           </span>
@@ -2590,6 +2601,9 @@ with mid:
           </span>
           <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
             Use <b>(x,y,z)</b> for a letter with multiple reflexes — e.g.&nbsp;<b>(q,ʾ,k,ḳ,g,ǧ)</b>
+          </span>
+          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+            Add a trailing comma — <b>(x,y,)</b> — to make a letter optional &nbsp;e.g.&nbsp;<b>(q,k,)tb</b> → qtb / ktb / tb
           </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
             e.g.&nbsp;<b>k t b</b>&nbsp;·&nbsp;<b>(q,ʾ,k,ḳ,g,ǧ)tv</b>&nbsp;·&nbsp;<b>(ǧ,ž)ls</b>
