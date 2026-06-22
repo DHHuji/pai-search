@@ -685,7 +685,16 @@ def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None, ta
   cursor:pointer; color:#0d3f75; transition:background .15s; user-select:none;
 }}
 .pai-nav-chip:hover {{ background:#b8deff; }}
-#pai-mark-pos {{ font-size:11px; color:#999; margin-left:auto; }}
+.pai-nav-arrow {{
+  background:#daeeff; border:1px solid #60aee8; border-radius:6px;
+  padding:2px 8px; font-size:13px; line-height:1.3; cursor:pointer;
+  color:#0d3f75; transition:background .15s, opacity .15s; user-select:none;
+}}
+.pai-nav-arrow:hover {{ background:#b8deff; }}
+.pai-nav-arrow[disabled] {{ opacity:.35; cursor:default; }}
+.pai-nav-arrow[disabled]:hover {{ background:#daeeff; }}
+#pai-nav-group {{ display:flex; align-items:center; gap:5px; margin-left:auto; }}
+#pai-mark-pos {{ font-size:11px; color:#999; min-width:34px; text-align:center; }}
 mark {{ background:#b6f2c8; border-radius:2px; padding:0 1px; }}
 mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2; }}
 /* ── Auto-tagged word highlight ── */
@@ -797,7 +806,7 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
       <input id="ctx-edit-input" type="text" placeholder="replacement…" autocomplete="off" spellcheck="false"/>
       <button id="ctx-edit-btn" title="Apply">↵</button>
     </div>
-    <div id="ctx-edit-note">Replaces all occurrences in the document</div>
+    <div id="ctx-edit-note">Replaces only this occurrence</div>
     <button id="ctx-kb-toggle">⌨ PAI chars</button>
     <div id="ctx-kb-panel"></div>
   </div>
@@ -816,7 +825,39 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   const editBtn    = document.getElementById('ctx-edit-btn');
   const editSect   = document.getElementById('ctx-edit-section');
   let   selText    = '';
+  let   selRange   = null;
   let   activeItem = null;
+
+  // ── Compute a 0-based occurrence index for `range` within the document's
+  //    full text, so the backend can target the SAME occurrence the user
+  //    actually selected (instead of replacing every match in the doc). ────
+  function computeOccurrenceIndex(range, text) {{
+    if (!range || !text) return 0;
+    try {{
+      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+      var offset = 0;
+      var targetOffset = -1;
+      var node;
+      while ((node = walker.nextNode())) {{
+        if (node === range.startContainer) {{
+          targetOffset = offset + range.startOffset;
+          break;
+        }}
+        offset += node.nodeValue.length;
+      }}
+      if (targetOffset === -1) return 0;
+      var fullText = document.body.textContent;
+      var count = 0;
+      var searchFrom = 0;
+      while (true) {{
+        var idx = fullText.indexOf(text, searchFrom);
+        if (idx === -1 || idx >= targetOffset) break;
+        count++;
+        searchFrom = idx + 1;
+      }}
+      return count;
+    }} catch(e) {{ return 0; }}
+  }}
 
   // ── Edit section: stop clicks bubbling to the close-menu handler ────────
   editSect.addEventListener('click',   function(e) {{ e.stopPropagation(); }});
@@ -848,15 +889,17 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   function applyEdit() {{
     const repl = editInput.value;
     if (!repl || repl === selText) return;
+    const occIdx = computeOccurrenceIndex(selRange, selText);
     menu.style.display = 'none';
     hideSubMenu();
     try {{
       localStorage.setItem('pai_pending_tag', JSON.stringify({{
-        type:      'edit',
-        find:      selText,
-        replace:   repl,
-        docId:     DOC_ID,
-        timestamp: Date.now()
+        type:            'edit',
+        find:            selText,
+        replace:         repl,
+        occurrenceIndex: occIdx,
+        docId:           DOC_ID,
+        timestamp:       Date.now()
       }}));
     }} catch(e) {{}}
   }}
@@ -922,6 +965,7 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   document.addEventListener('contextmenu', function(e) {{
     const sel = window.getSelection();
     selText = sel ? sel.toString().trim() : '';
+    selRange = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).cloneRange() : null;
     if (!selText) return;
     e.preventDefault();
     hideSubMenu();
@@ -989,6 +1033,41 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   }}
 }})();
 
+// ── Preserve scroll position across Streamlit reruns ────────────────────────
+// Every right-click tag (or untag) triggers a full Streamlit script rerun,
+// which rebuilds this iframe's HTML from scratch and reloads it — losing
+// whatever scroll position the user was reading at ("kicked out of the
+// text" — reported when tagging, and even more noticeable after several
+// tags accumulate). This iframe is same-origin with the parent page (an
+// unsandboxed srcdoc iframe inherits the parent's origin — the same reason
+// the right-click → localStorage bridge to _TAG_BRIDGE already works), so
+// sessionStorage persists across these reloads and lets us save/restore
+// scroll position per document.
+(function() {{
+  var DOC_ID = {json.dumps(doc_id)};
+  var SCROLL_KEY = 'pai_scroll_' + DOC_ID;
+  function restoreScroll() {{
+    try {{
+      var saved = sessionStorage.getItem(SCROLL_KEY);
+      if (saved) window.scrollTo(0, parseInt(saved, 10) || 0);
+    }} catch(e) {{}}
+  }}
+  var _saveTimer = null;
+  function saveScrollSoon() {{
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(function() {{
+      try {{ sessionStorage.setItem(SCROLL_KEY, String(window.scrollY)); }} catch(e) {{}}
+    }}, 150);
+  }}
+  window.addEventListener('scroll', saveScrollSoon, {{passive: true}});
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreScroll);
+  else restoreScroll();
+  // Highlighting/layout above can still shift content height right after
+  // DOMContentLoaded, so restore again once things settle.
+  setTimeout(restoreScroll, 60);
+  setTimeout(restoreScroll, 250);
+}})();
+
 // ── Word chip navigation ────────────────────────────────────────────────────
 (function() {{
   var NAV_WORDS = {nav_words_js};
@@ -1001,7 +1080,14 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   NAV_WORDS.forEach(function(w) {{
     html += '<button class="pai-nav-chip" data-navword="' + w.replace(/"/g,'&quot;') + '" onclick="paiNavWord(this)">' + w + '</button>';
   }});
-  html += '<span id="pai-mark-pos"></span>';
+  // Prev/next arrows to step between occurrences of whichever word is
+  // currently active (set by clicking one of the chips above), so the user
+  // isn't limited to repeatedly re-clicking the same chip to go forward only.
+  html += '<span id="pai-nav-group">'
+        +   '<button id="pai-nav-prev" class="pai-nav-arrow" onclick="paiNavStep(-1)" title="Previous occurrence" disabled>◀</button>'
+        +   '<span id="pai-mark-pos"></span>'
+        +   '<button id="pai-nav-next" class="pai-nav-arrow" onclick="paiNavStep(1)" title="Next occurrence" disabled>▶</button>'
+        + '</span>';
   strip.innerHTML = html;
 
   function insertStrip() {{
@@ -1036,25 +1122,56 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     return !!(featuresStart.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING);
   }}
 
-  function wrapWordInNode(node, word) {{
-    var text = node.nodeValue;
-    var idx  = text.indexOf(word);
-    if (idx === -1) return null;
-    var before = text.slice(0, idx);
-    var after  = text.slice(idx + word.length);
-    var span = document.createElement('span');
-    span.className = 'pai-tagged-word';
-    span.textContent = word;
-    var frag = document.createDocumentFragment();
-    if (before) frag.appendChild(document.createTextNode(before));
-    frag.appendChild(span);
-    var rest = after ? document.createTextNode(after) : null;
-    if (rest) frag.appendChild(rest);
-    node.parentNode.replaceChild(frag, node);
-    return rest;   // continue scanning from remaining text
+  // Find every non-overlapping match of ANY word in `words` within `text`,
+  // leftmost match wins ties (mirrors the previous per-word sequential
+  // behavior closely enough for the rare overlapping-word edge case).
+  function findNonOverlappingMatches(text, words) {{
+    var matches = [];
+    words.forEach(function(word) {{
+      var idx = 0;
+      while ((idx = text.indexOf(word, idx)) !== -1) {{
+        matches.push({{start: idx, end: idx + word.length}});
+        idx += word.length;
+      }}
+    }});
+    matches.sort(function(a, b) {{ return a.start - b.start; }});
+    var resolved = [];
+    var lastEnd = -1;
+    matches.forEach(function(m) {{
+      if (m.start >= lastEnd) {{
+        resolved.push(m);
+        lastEnd = m.end;
+      }}
+    }});
+    return resolved;
   }}
 
-  function highlightWord(word) {{
+  // Wrap ALL tagged-word occurrences inside a single text node in one DOM
+  // mutation, instead of one mutation per word — this is the key perf win:
+  // previously, tagging N words caused N full document TreeWalker passes
+  // PLUS N rounds of DOM mutation (each round operating on the just-mutated
+  // tree from the previous word), which got slower the more words were
+  // already tagged. Now it's exactly one pass, one mutation per node.
+  function wrapAllWordsInNode(node, words) {{
+    var text = node.nodeValue;
+    var matches = findNonOverlappingMatches(text, words);
+    if (!matches.length) return;
+    var frag = document.createDocumentFragment();
+    var pos = 0;
+    matches.forEach(function(m) {{
+      if (m.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, m.start)));
+      var span = document.createElement('span');
+      span.className = 'pai-tagged-word';
+      span.textContent = text.slice(m.start, m.end);
+      frag.appendChild(span);
+      pos = m.end;
+    }});
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+    node.parentNode.replaceChild(frag, node);
+  }}
+
+  function highlightAllTagged(words) {{
+    if (!words || !words.length) return;
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {{
       acceptNode: function(n) {{
         // Skip script/style and already-highlighted spans
@@ -1065,34 +1182,37 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
         if (p.classList && p.classList.contains('pai-tagged-word')) return NodeFilter.FILTER_REJECT;
         // Skip anything in or after the FEATURES section
         if (isInOrAfterFeatures(n)) return NodeFilter.FILTER_REJECT;
-        return n.nodeValue.includes(word) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        for (var i = 0; i < words.length; i++) {{
+          if (n.nodeValue.indexOf(words[i]) !== -1) return NodeFilter.FILTER_ACCEPT;
+        }}
+        return NodeFilter.FILTER_SKIP;
       }}
     }}, false);
     var nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
-    nodes.forEach(function(n) {{
-      var rest = n;
-      while (rest && rest.nodeValue && rest.nodeValue.includes(word)) {{
-        rest = wrapWordInNode(rest, word);
-      }}
-    }});
+    nodes.forEach(function(n) {{ wrapAllWordsInNode(n, words); }});
   }}
 
   function run() {{
     findFeaturesSection();
-    TAGGED.forEach(highlightWord);
+    highlightAllTagged(TAGGED);
   }}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 }})();
 
-var _paiWordIdx = {{}}, _paiLastHL = null, _paiLastBtn = null;
-function paiNavWord(btn) {{
-  var word = btn.getAttribute('data-navword');
+// ── Match navigation: chip click (jump to a word) + prev/next arrows
+//    (step through the currently-active word's occurrences in either
+//    direction) share this single piece of state. ─────────────────────────
+var _paiActiveWord  = null;   // raw (un-normalized) data-navword of the active chip
+var _paiActiveMarks = [];     // all <mark> elements for the active word, in document order
+var _paiActiveIdx   = -1;     // 0-based index into _paiActiveMarks of the current position
+var _paiLastHL       = null;
+
+function _paiCollectMarks(word) {{
   // Normalize both sides to NFC if available (guards against NFD mismatches)
   var normWord = (typeof word === 'string' && String.prototype.normalize)
                    ? word.normalize('NFC') : word;
-  // Collect marks whose data-word matches this chip's word
   var allMarks = Array.from(document.querySelectorAll('mark[data-word]'));
   var wordMarks = allMarks.filter(function(m) {{
     var dw = m.getAttribute('data-word') || '';
@@ -1118,28 +1238,53 @@ function paiNavWord(btn) {{
   if (wordMarks.length === 0) {{
     wordMarks = allMarks;
   }}
-  if (wordMarks.length === 0) return;
+  return wordMarks;
+}}
 
-  // Reset index when switching to a different word
-  if (_paiLastBtn !== btn) {{
-    _paiWordIdx[word] = 0;
-    _paiLastBtn = btn;
-  }}
-  if (_paiWordIdx[word] === undefined) _paiWordIdx[word] = 0;
+// Move the highlight + scroll position to `idx` (wrapped into range) within
+// the currently-active word's occurrence list, and refresh the "n/total" +
+// arrow enabled/disabled state.
+function _paiGoTo(idx) {{
+  var n = _paiActiveMarks.length;
+  if (!n) return;
+  idx = ((idx % n) + n) % n;   // proper modulo — handles negative `idx` for "prev"
 
-  // Remove previous highlight
   if (_paiLastHL) _paiLastHL.classList.remove('pai-hl');
-
-  var m = wordMarks[_paiWordIdx[word]];
+  var m = _paiActiveMarks[idx];
   m.classList.add('pai-hl');
   m.scrollIntoView({{behavior:'smooth', block:'center'}});
   _paiLastHL = m;
-
-  var cur = _paiWordIdx[word] + 1;
-  _paiWordIdx[word] = cur % wordMarks.length;
+  _paiActiveIdx = idx;
 
   var pos = document.getElementById('pai-mark-pos');
-  if (pos) pos.textContent = cur + '/' + wordMarks.length;
+  if (pos) pos.textContent = (idx + 1) + '/' + n;
+  var prevBtn = document.getElementById('pai-nav-prev');
+  var nextBtn = document.getElementById('pai-nav-next');
+  // With wraparound cycling, prev/next stay enabled whenever there's more
+  // than one occurrence to move between.
+  if (prevBtn) prevBtn.disabled = n <= 1;
+  if (nextBtn) nextBtn.disabled = n <= 1;
+}}
+
+// Clicking a chip: jump to that word's FIRST occurrence the first time it's
+// selected; clicking the SAME chip again cycles forward (kept for backward
+// compatibility with the previous single-click-to-cycle behavior).
+function paiNavWord(btn) {{
+  var word = btn.getAttribute('data-navword');
+  if (word !== _paiActiveWord) {{
+    _paiActiveWord  = word;
+    _paiActiveMarks = _paiCollectMarks(word);
+    _paiActiveIdx   = -1;   // _paiGoTo(0) below lands on the first occurrence
+  }}
+  if (!_paiActiveMarks.length) return;
+  _paiGoTo(_paiActiveIdx + 1);
+}}
+
+// Prev (-1) / next (+1) arrow buttons — step through occurrences of
+// whichever word is currently active, in either direction, with wraparound.
+function paiNavStep(delta) {{
+  if (!_paiActiveWord || !_paiActiveMarks.length) return;
+  _paiGoTo(_paiActiveIdx + delta);
 }}
 </script>
 """
@@ -2292,32 +2437,105 @@ def update_gdoc_features_section(
     # Users can click "Open in Google Docs" to see the freshly written FEATURES block.
 
 
-def find_replace_in_gdoc(doc_id: str, find_text: str, replace_text: str) -> int:
+def _get_gdoc_body_runs(doc_id: str) -> list[tuple]:
     """
-    Apply replaceAllText in a Google Doc.  Returns the number of replacements made.
-    Raises on API error.
+    Return a flat list of (run_start_index, text) for every textRun in the
+    Google Doc's body, in document order. run_start_index is the Docs API
+    structural index where that run's text begins, so
+    run_start_index + offset_within_run gives an absolute Docs API character
+    index for any character inside that run. Used by
+    replace_one_occurrence_in_gdoc() to locate a specific occurrence's exact
+    [startIndex, endIndex) range for a targeted (not document-wide) edit.
     """
     _, docs_svc, _ = get_services()
-    resp = docs_svc.documents().batchUpdate(
+    doc = docs_svc.documents().get(documentId=doc_id).execute()
+    runs: list[tuple] = []
+
+    def walk(elements):
+        for el in elements:
+            if 'paragraph' in el:
+                for pe in el['paragraph'].get('elements', []):
+                    tr = pe.get('textRun')
+                    if tr is not None:
+                        runs.append((pe['startIndex'], tr.get('content', '')))
+            elif 'table' in el:
+                for row in el['table'].get('tableRows', []):
+                    for cell in row.get('tableCells', []):
+                        walk(cell.get('content', []))
+            elif 'tableOfContents' in el:
+                walk(el['tableOfContents'].get('content', []))
+
+    walk(doc.get('body', {}).get('content', []))
+    return runs
+
+
+def replace_one_occurrence_in_gdoc(doc_id: str, find_text: str, replace_text: str,
+                                    occurrence_index: int = 0) -> bool:
+    """
+    Replace ONLY the occurrence_index-th (0-based) occurrence of find_text in
+    the document body with replace_text.
+
+    This replaces the old find_replace_in_gdoc(), which used the Docs API's
+    replaceAllText and therefore replaced EVERY occurrence in the document —
+    a bug, since the context menu is for editing the one word/phrase the
+    user actually selected. occurrence_index is computed client-side (see
+    computeOccurrenceIndex() in the context-menu JS) by counting how many
+    matches of the selected text appear before the user's actual selection
+    point, so it identifies exactly the occurrence they marked, regardless
+    of how many other identical occurrences exist elsewhere in the doc.
+
+    Returns True if the replacement was made; False if that occurrence
+    couldn't be located (e.g. the doc changed since the page loaded, or the
+    match's start/end fall in runs this can't safely resolve) — callers
+    should show a clear "couldn't find it" message rather than silently
+    falling back to a document-wide replace.
+    """
+    runs = _get_gdoc_body_runs(doc_id)
+    full_text = ''.join(r[1] for r in runs)
+
+    # Find the occurrence_index-th (0-based) match of find_text.
+    search_from = 0
+    match_start = -1
+    for _ in range(occurrence_index + 1):
+        match_start = full_text.find(find_text, search_from)
+        if match_start == -1:
+            return False
+        search_from = match_start + 1
+    match_end = match_start + len(find_text)
+
+    # Map [match_start, match_end) in the concatenated text back to absolute
+    # Docs API indices using each run's own startIndex — this stays correct
+    # even though paragraph-break characters (not part of any textRun) are
+    # absent from `full_text`, since each run supplies its own true offset.
+    abs_start = abs_end = None
+    pos = 0
+    for run_start, text in runs:
+        run_text_start, run_text_end = pos, pos + len(text)
+        if abs_start is None and run_text_start <= match_start < run_text_end:
+            abs_start = run_start + (match_start - run_text_start)
+        if abs_end is None and run_text_start < match_end <= run_text_end:
+            abs_end = run_start + (match_end - run_text_start)
+        pos = run_text_end
+        if abs_start is not None and abs_end is not None:
+            break
+
+    if abs_start is None or abs_end is None:
+        return False   # couldn't safely resolve this occurrence's exact range
+
+    _, docs_svc, _ = get_services()
+    docs_svc.documents().batchUpdate(
         documentId=doc_id,
-        body={'requests': [{
-            'replaceAllText': {
-                'containsText': {'text': find_text, 'matchCase': True},
-                'replaceText':  replace_text,
-            }
-        }]},
+        body={'requests': [
+            {'deleteContentRange': {'range': {'startIndex': abs_start, 'endIndex': abs_end}}},
+            {'insertText': {'location': {'index': abs_start}, 'text': replace_text}},
+        ]},
     ).execute()
-    count = (
-        resp.get('replies', [{}])[0]
-           .get('replaceAllText', {})
-           .get('occurrencesChanged', 0)
-    )
-    if count:
-        # Bump the per-doc version so only this document's cache entry is invalidated,
-        # not every other document in the search results.
-        _dv = st.session_state.setdefault('_doc_versions', {})
-        _dv[doc_id] = _dv.get(doc_id, 0) + 1
-    return count
+
+    # Bump the per-doc version so only this document's cache entry is invalidated,
+    # not every other document in the search results.
+    _dv = st.session_state.setdefault('_doc_versions', {})
+    _dv[doc_id] = _dv.get(doc_id, 0) + 1
+    return True
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -3247,14 +3465,18 @@ if _bridge_tag:
 
         if _bt_type == 'edit':
             # ── Inline find-and-replace from context menu ──────────────────────
+            # Replaces ONLY the specific occurrence the user selected (see
+            # replace_one_occurrence_in_gdoc()) — not every occurrence of
+            # find_text in the document.
             find_text = _bridge_tag.get('find', '').strip()
             repl_text = _bridge_tag.get('replace', '').strip()
+            occ_idx   = _bridge_tag.get('occurrenceIndex', 0) or 0
             if find_text and repl_text and doc_id:
                 try:
-                    n = find_replace_in_gdoc(doc_id, find_text, repl_text)
-                    st.session_state['_ctx_edit_result'] = (find_text, repl_text, n, None)
+                    ok = replace_one_occurrence_in_gdoc(doc_id, find_text, repl_text, occ_idx)
+                    st.session_state['_ctx_edit_result'] = (find_text, repl_text, ok, None)
                 except Exception as e:
-                    st.session_state['_ctx_edit_result'] = (find_text, repl_text, 0, str(e))
+                    st.session_state['_ctx_edit_result'] = (find_text, repl_text, False, str(e))
             st.session_state['_last_bridge_ts'] = _bt_ts
 
         else:
@@ -3284,13 +3506,14 @@ if _bridge_tag:
 
 # ── Show result of context-menu find-replace (survives the rerun) ─────────────
 if '_ctx_edit_result' in st.session_state:
-    _find, _repl, _n, _err = st.session_state.pop('_ctx_edit_result')
+    _find, _repl, _ok, _err = st.session_state.pop('_ctx_edit_result')
     if _err:
         st.error(f'Replace failed: {_err}')
-    elif _n:
-        st.success(f'✅  Replaced {_n} occurrence(s) of "{_find}" → "{_repl}"')
+    elif _ok:
+        st.success(f'✅  Replaced "{_find}" → "{_repl}"')
     else:
-        st.info(f'No occurrences of "{_find}" found in this document.')
+        st.info(f'Couldn\'t find that exact occurrence of "{_find}" anymore — '
+                f'the document may have changed since this page loaded. Try reloading.')
 
 # ── Results ───────────────────────────────────────────────────────────────────
 _filters_active = any(v for v in active_filters.values() if v)
@@ -3428,16 +3651,23 @@ if results:
     _feat_names_dl = [fd[2] for fd in FEATURE_DEFS]
 
     _csv_w.writerow(
-        ['Document', 'Link', 'Matches', 'Matched words']
+        ['#', 'Document', 'Link', 'Matches', 'Matched words']
         + [_META_LABELS.get(k, k) for k in _META_KEYS]
         + _feat_names_dl
     )
 
+    # Explicit 1-based rank column — incremented in the exact same order (and
+    # with the exact same de-dup skip logic) as the on-screen results list
+    # below, so a row's "#" always matches its position in the search-results
+    # panel even if a spreadsheet program re-sorts or the user wants to verify
+    # the CSV matches what's shown on screen.
     _seen_dl = set()
+    _dl_rank = 0
     for _r in results:
         if _r['doc_id'] in _seen_dl:
             continue
         _seen_dl.add(_r['doc_id'])
+        _dl_rank += 1
 
         _words = ', '.join(list(dict.fromkeys(
             _STRIP_MARK.sub('', w) for w in _r.get('matched_words', [])
@@ -3466,7 +3696,7 @@ if results:
             _feat_vals = [''] * len(FEATURE_DEFS)
 
         _csv_w.writerow(
-            [_r['name'], _link, _r.get('match_count', ''), _words]
+            [_dl_rank, _r['name'], _link, _r.get('match_count', ''), _words]
             + _meta_vals
             + _feat_vals
         )
@@ -3485,10 +3715,12 @@ if results:
         doc_id_to_rows.setdefault(doc['doc_id'], []).append(doc['sheet_row'])
 
     seen_doc_ids = set()
+    _disp_rank = 0
     for r in results:
         if r['doc_id'] in seen_doc_ids:
             continue          # skip duplicate doc_ids (same Google Doc listed twice in sheet)
         seen_doc_ids.add(r['doc_id'])
+        _disp_rank += 1       # matches the "#" column written to the CSV above
 
         meta  = ' · '.join(filter(None, [
             r.get('village', ''), r.get('community', ''), r.get('gender', '')
@@ -3517,11 +3749,11 @@ if results:
         _is_text_search = _has_content and mode_shown == 'transcription' and r.get('match_count', 0) > 0
         if _is_text_search:
             label = (
-                f"📄  {r['name']}   ·   {r['match_count']} match{'es' if r['match_count'] != 1 else ''}"
+                f"#{_disp_rank}  ·  📄  {r['name']}   ·   {r['match_count']} match{'es' if r['match_count'] != 1 else ''}"
                 f"{status_str}{words_str}"
             )
         else:
-            label = f"📄  {r['name']}{status_str}"
+            label = f"#{_disp_rank}  ·  📄  {r['name']}{status_str}"
             if meta:
                 label += f"   ·   {meta}"
 
@@ -3693,8 +3925,12 @@ if st.session_state.get('_feat_search') and corpus:
         _fb_meta_labels = ['שם יישוב', 'קהילה', 'Social Typology', 'Geo Typology',
                            'מגדר דובר', 'Status']
         _all_feat_names = [fd[2] for fd in FEATURE_DEFS]
-        _fw.writerow(['Document', 'Link'] + _fb_meta_labels + _all_feat_names)
+        _fw.writerow(['#', 'Document', 'Link'] + _fb_meta_labels + _all_feat_names)
+        # Same explicit rank column as the main search-results CSV, kept in
+        # lock-step with the on-screen "#" prefix below.
+        _fb_rank = 0
         for _fr in _feat_rows:
+            _fb_rank += 1
             _fb_meta_vals = [_fr.get(k, '') for k in _fb_meta_keys]
             # Fetch full feature row from sheet
             _fb_feat_vals = []
@@ -3713,6 +3949,7 @@ if st.session_state.get('_feat_search') and corpus:
             else:
                 _fb_feat_vals = [''] * len(FEATURE_DEFS)
             _fw.writerow([
+                _fb_rank,
                 _fr['name'],
                 f"https://docs.google.com/document/d/{_fr['doc_id']}/edit",
             ] + _fb_meta_vals + _fb_feat_vals)
@@ -3730,13 +3967,16 @@ if st.session_state.get('_feat_search') and corpus:
             _feat_doc_id_to_rows.setdefault(_cdoc['doc_id'], []).append(_cdoc['sheet_row'])
 
         # ── Display each tagged document ──────────────────────────────────────
+        _fb_disp_rank = 0
         for _fr in _feat_rows:
+            _fb_disp_rank += 1   # matches the "#" column written to the CSV above
             _meta = ' · '.join(filter(None, [_fr['village'], _fr['community']]))
             _vals_str = '  ·  '.join(
                 f"{fn} = {'✓' if v is True else v}"
                 for fn, v in _fr['values'].items() if v
             )
-            with st.expander(f"📄  {_fr['name']}   ·   {_meta}   |  {_vals_str}  |" if _vals_str else f"📄  {_fr['name']}   ·   {_meta}"):
+            _fb_label_base = f"#{_fb_disp_rank}  ·  📄  {_fr['name']}   ·   {_meta}"
+            with st.expander(f"{_fb_label_base}   |  {_vals_str}  |" if _vals_str else _fb_label_base):
                 # Document viewer — loaded on demand (same pattern as the main
                 # search results), so the actual transcription text is shown
                 # inline instead of only a "Open in Google Docs" link.
