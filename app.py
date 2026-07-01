@@ -2186,7 +2186,11 @@ def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
             spreadsheetId=SPREADSHEET_ID,
             body={'valueInputOption': 'RAW', 'data': data},
         ).execute()
-        get_sheet_features.clear()
+        # Invalidate the sheet-features cache the same way write_sheet_features
+        # does: bump the version so the next call to get_sheet_features fetches
+        # fresh data. (get_sheet_features is a plain wrapper — calling .clear()
+        # on it would raise AttributeError since it is not a cached function.)
+        st.session_state['_features_version'] = st.session_state.get('_features_version', 0) + 1
 
     # 2. Rewrite Google Doc FEATURES section with updated (cleared) values
     if doc_id and sheet_rows:
@@ -2683,9 +2687,14 @@ def search_by_name(query: str, corpus: list[dict]) -> list[dict]:
         return []
 
     results = []
+    seen_doc_ids = set()   # same Google Doc can be listed under multiple sheet rows
     bar = st.progress(0.0, text="Loading document…")
     for i, doc in enumerate(matches):
         bar.progress((i + 1) / max(len(matches), 1), text=f"Loading · {doc['name']}")
+        if doc['doc_id'] in seen_doc_ids:
+            continue        # skip duplicate doc_ids — avoid a redundant fetch + a
+                             # duplicate result card for what is really one document
+        seen_doc_ids.add(doc['doc_id'])
         try:
             _doc_ver = st.session_state.get('_doc_versions', {}).get(doc['doc_id'], 0)
             content = get_doc_content(doc['doc_id'], version=_doc_ver)
@@ -3757,7 +3766,7 @@ if results:
             if meta:
                 label += f"   ·   {meta}"
 
-        with st.expander(label):
+        with st.expander(label, key=f"res_exp_{r['doc_id']}"):
             if _has_content:
                 _meta_badges = f'<span style="color:#8899aa">{meta}</span>' if meta else ''
                 if _is_text_search:
@@ -3769,6 +3778,14 @@ if results:
                 else:
                     _meta_badges = f'<span class="badge">{r.get("word_count", "?")} words</span>' + _meta_badges
                 st.markdown(f'<div class="doc-card-meta">{_meta_badges}</div>', unsafe_allow_html=True)
+                if r.get('word_count', None) == 0:
+                    # A genuinely-empty transcription is possible, but far more often this
+                    # means the cached copy of this document is stale (e.g. text was added
+                    # in Google Docs after the result was cached). Point the user at the
+                    # per-document "🔄 Reload" button below rather than leaving "0 words"
+                    # unexplained.
+                    st.caption("⚠️ Showing 0 words — if this document has text in Google Docs, "
+                               "try the 🔄 Reload button below to re-fetch it.")
             else:
                 st.markdown(f"""
                 <div class="doc-card-meta">
@@ -3828,10 +3845,25 @@ if results:
             if all_rows:
                 _render_submit_bar(r['doc_id'], r['name'], all_rows)
 
-            st.markdown(
-                f"[Open in Google Docs ↗](https://docs.google.com/document/d/{r['doc_id']}/edit)",
-                unsafe_allow_html=False,
-            )
+            _link_col, _reload_col = st.columns([5, 1])
+            with _link_col:
+                st.markdown(
+                    f"[Open in Google Docs ↗](https://docs.google.com/document/d/{r['doc_id']}/edit)",
+                    unsafe_allow_html=False,
+                )
+            with _reload_col:
+                # Per-document cache-bust: the search results (incl. word count) are
+                # cached for up to an hour. If a document was just edited directly in
+                # Google Docs (text added/changed outside this app), the cached copy
+                # can look stale — e.g. showing "0 words" even though the live doc has
+                # content. This re-fetches just this one document, without forcing a
+                # full "Clear cache & reload" of the entire corpus.
+                if st.button("🔄 Reload", key=f"btn_reload_{r['doc_id']}",
+                             help="Re-fetch this document fresh from Google Docs "
+                                  "(use this if the word count or text looks stale)"):
+                    _dv = st.session_state.setdefault('_doc_versions', {})
+                    _dv[r['doc_id']] = _dv.get(r['doc_id'], 0) + 1
+                    st.rerun()
 
 # ── Feature browser results ───────────────────────────────────────────────────
 if st.session_state.get('_feat_search') and corpus:
@@ -3976,7 +4008,8 @@ if st.session_state.get('_feat_search') and corpus:
                 for fn, v in _fr['values'].items() if v
             )
             _fb_label_base = f"#{_fb_disp_rank}  ·  📄  {_fr['name']}   ·   {_meta}"
-            with st.expander(f"{_fb_label_base}   |  {_vals_str}  |" if _vals_str else _fb_label_base):
+            with st.expander(f"{_fb_label_base}   |  {_vals_str}  |" if _vals_str else _fb_label_base,
+                               key=f"feat_exp_{_fr['doc_id']}"):
                 # Document viewer — loaded on demand (same pattern as the main
                 # search results), so the actual transcription text is shown
                 # inline instead of only a "Open in Google Docs" link.
@@ -4014,6 +4047,17 @@ if st.session_state.get('_feat_search') and corpus:
                 if _fb_all_rows:
                     _render_submit_bar(_fr['doc_id'], _fr['name'], _fb_all_rows)
 
-                st.markdown(
-                    f"[Open in Google Docs ↗](https://docs.google.com/document/d/{_fr['doc_id']}/edit)"
-                )
+                _fb_link_col, _fb_reload_col = st.columns([5, 1])
+                with _fb_link_col:
+                    st.markdown(
+                        f"[Open in Google Docs ↗](https://docs.google.com/document/d/{_fr['doc_id']}/edit)"
+                    )
+                with _fb_reload_col:
+                    # Same per-document cache-bust as the main search results — see
+                    # the comment next to the equivalent button there.
+                    if st.button("🔄 Reload", key=f"feat_btn_reload_{_fr['doc_id']}",
+                                 help="Re-fetch this document fresh from Google Docs "
+                                      "(use this if the word count or text looks stale)"):
+                        _dv = st.session_state.setdefault('_doc_versions', {})
+                        _dv[_fr['doc_id']] = _dv.get(_fr['doc_id'], 0) + 1
+                        st.rerun()
