@@ -256,8 +256,8 @@ def _alts(items) -> str:
 
 _C = _alts(CONSONANTS)
 _V = _alts(VOWELS)
-_S = _alts(SHORT_VOWELS)   # S = short vowel
-_L = _alts(LONG_VOWELS)    # L = long  vowel
+_S = _alts(SHORT_VOWELS)   # v  = short vowel wildcard
+_L = _alts(LONG_VOWELS)    # v̄  = long  vowel wildcard (v + combining macron)
 _D = _alts(DIPHTHONGS)
 _G = _alts(GUTTURALS)
 _E = _alts(EMPHATICS)
@@ -267,8 +267,10 @@ def _pattern_char_to_regex(ch: str) -> str:
     """Convert a single pattern character/wildcard to a regex fragment."""
     if   ch == 'C': return _C
     elif ch == 'V': return _V
-    elif ch == 'S': return _S
-    elif ch == 'L': return _L
+    elif ch == 'v': return _S   # v  = short vowel  (was S)
+    # Note: v̄ (long vowel) is two code points (v + combining macron) and is
+    # handled by the caller (_tok_to_regex / pattern_to_regex loop) before
+    # this function is reached, so it never arrives here as a bare 'v'.
     elif ch == 'D': return _D
     elif ch == 'G': return _G
     elif ch == 'E': return _E
@@ -276,11 +278,36 @@ def _pattern_char_to_regex(ch: str) -> str:
     else:           return re.escape(ch)
 
 
+def _tok_to_regex(s: str) -> str:
+    """
+    Convert an arbitrary token string (a single character or an alternatives-
+    group alternative such as 'v̄' or 'ā') to a regex fragment.
+
+    v̄ is the long-vowel wildcard.  It is two Unicode code points (v +
+    COMBINING MACRON ABOVE, U+0304) so callers that iterate code-point by
+    code-point would split it incorrectly; this helper keeps the pair together.
+    """
+    result = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        # v followed by any combining character → long-vowel wildcard (v̄)
+        if (ch == 'v'
+                and i + 1 < len(s)
+                and unicodedata.category(s[i + 1]) == 'Mn'):
+            result.append(_L)
+            i += 2
+        else:
+            result.append(_pattern_char_to_regex(ch))
+            i += 1
+    return ''.join(result)
+
+
 def pattern_to_regex(pattern: str) -> re.Pattern:
     """
     Convert a PAI pattern string to a compiled regex.
 
-    Wildcards : C=consonant  V=vowel (all)  S=short vowel  L=long vowel
+    Wildcards : C=consonant  V=vowel (all)  v=short vowel  v̄=long vowel
                 D=diphthong  G=guttural  E=emphatic
                 $=any characters (0 or more)
     Anchors   : ^ at start = word must begin here
@@ -310,15 +337,23 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
             if j == -1:
                 raise re.error("Unmatched '(' in pattern")
             inner = core[i + 1:j]
-            # Split on commas and convert each alternative
+            # Split on commas and convert each alternative via _tok_to_regex so
+            # that v̄ (two code points) inside a group is treated as one token.
             alternatives = [a.strip() for a in inner.split(',')]
-            alt_regexes = [''.join(_pattern_char_to_regex(c) for c in alt)
-                           for alt in alternatives]
+            alt_regexes = [_tok_to_regex(alt) for alt in alternatives]
             parts.append('(?:' + '|'.join(alt_regexes) + ')')
             i = j + 1
         else:
-            parts.append(_pattern_char_to_regex(ch))
-            i += 1
+            # Handle v̄ (v + combining macron) as the long-vowel wildcard.
+            # It occupies two code points so consume both here.
+            if (ch == 'v'
+                    and i + 1 < len(core)
+                    and unicodedata.category(core[i + 1]) == 'Mn'):
+                parts.append(_L)
+                i += 2
+            else:
+                parts.append(_pattern_char_to_regex(ch))
+                i += 1
 
     rx_str = ''.join(parts)
     if anchor_start: rx_str = '^' + rx_str
@@ -3196,8 +3231,8 @@ with mid:
         <div class="legend-row">
           <span class="legend-pill"><b>C</b> = consonant</span>
           <span class="legend-pill"><b>V</b> = vowel (long or short)</span>
-          <span class="legend-pill"><b>S</b> = short vowel (a e i o u ə)</span>
-          <span class="legend-pill"><b>L</b> = long vowel (ā ē ī ō ū ā̈)</span>
+          <span class="legend-pill"><b>v</b> = short vowel (a e i o u ə)</span>
+          <span class="legend-pill"><b>v̄</b> = long vowel (ā ē ī ō ū ā̈)</span>
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
           <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
           <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
