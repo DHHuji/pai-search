@@ -3745,13 +3745,83 @@ if results:
             + _feat_vals
         )
 
-    st.download_button(
-        label="⬇ Download results (CSV)",
-        data=_csv_buf.getvalue().encode('utf-8-sig'),
-        file_name=f"pai_search_{pattern_shown or 'filtered'}.csv",
-        mime='text/csv',
-        key='dl_search_results',
-    )
+    # ── Collect checked results from the previous render (session_state has the
+    # checkbox values from the last Streamlit run, which is exactly what we want).
+    _sel_ids: set = set()
+    _seen_sel_tmp = set()
+    for _r in results:
+        if _r['doc_id'] in _seen_sel_tmp:
+            continue
+        _seen_sel_tmp.add(_r['doc_id'])
+        if st.session_state.get(f"sel_{_r['doc_id']}", False):
+            _sel_ids.add(_r['doc_id'])
+    _n_sel = len(_sel_ids)
+
+    # Build a second CSV that contains only the selected results + comments
+    _sel_buf = _io.StringIO()
+    if _n_sel > 0:
+        _sel_w2 = csv.writer(_sel_buf)
+        _sel_w2.writerow(
+            ['#', 'Document', 'Link', 'Comment', 'Matches', 'Matched words']
+            + [_META_LABELS.get(k, k) for k in _META_KEYS]
+            + _feat_names_dl
+        )
+        _sel_rank2 = 0
+        _seen_sel2 = set()
+        for _r in results:
+            if _r['doc_id'] in _seen_sel2:
+                continue
+            _seen_sel2.add(_r['doc_id'])
+            _sel_rank2 += 1          # mirrors the rank shown on-screen
+            if _r['doc_id'] not in _sel_ids:
+                continue
+            _comment2 = st.session_state.get(f"comment_{_r['doc_id']}", '') or ''
+            _words2 = ', '.join(list(dict.fromkeys(
+                _STRIP_MARK.sub('', w) for w in _r.get('matched_words', [])
+            )))
+            _link2 = f"https://docs.google.com/document/d/{_r['doc_id']}/edit"
+            _ce2 = next((d for d in corpus if d['doc_id'] == _r['doc_id']), None)
+            _mv2 = [(_ce2 or _r).get(k, '') for k in _META_KEYS]
+            _fv2 = []
+            _srow2 = (_ce2 or {}).get('sheet_row') or _r.get('sheet_row')
+            if _srow2:
+                try:
+                    _fd2 = get_sheet_features(_srow2)
+                    for _f2 in FEATURE_DEFS:
+                        _v2 = _fd2.get(_f2[1])
+                        if _f2[3] == 'bool':
+                            _fv2.append('TRUE' if _v2 else 'FALSE')
+                        else:
+                            _fv2.append(_v2 if _v2 not in (None, '', False) else '')
+                except Exception:
+                    _fv2 = [''] * len(FEATURE_DEFS)
+            else:
+                _fv2 = [''] * len(FEATURE_DEFS)
+            _sel_w2.writerow(
+                [_sel_rank2, _r['name'], _link2, _comment2, _r.get('match_count', ''), _words2]
+                + _mv2 + _fv2
+            )
+
+    _dl_col1, _dl_col2 = st.columns([3, 2])
+    with _dl_col1:
+        st.download_button(
+            label="⬇ Download results (CSV)",
+            data=_csv_buf.getvalue().encode('utf-8-sig'),
+            file_name=f"pai_search_{pattern_shown or 'filtered'}.csv",
+            mime='text/csv',
+            key='dl_search_results',
+        )
+    with _dl_col2:
+        if _n_sel > 0:
+            st.download_button(
+                label=f"⬇ Download selected ({_n_sel})",
+                data=_sel_buf.getvalue().encode('utf-8-sig'),
+                file_name=f"pai_selected_{pattern_shown or 'filtered'}.csv",
+                mime='text/csv',
+                key='dl_selected_results',
+            )
+        else:
+            st.caption("☑ Check results below to download selected")
 
     # Map doc_id → all sheet rows (handles recordings split across multiple rows)
     doc_id_to_rows: dict = {}
@@ -3801,104 +3871,113 @@ if results:
             if meta:
                 label += f"   ·   {meta}"
 
-        with st.expander(label, key=f"res_exp_{r['doc_id']}"):
-            if _has_content:
-                _meta_badges = f'<span style="color:#8899aa">{meta}</span>' if meta else ''
-                if _is_text_search:
-                    _meta_badges = (
-                        f'<span class="badge-green">✦ {r["match_count"]} matches</span>'
-                        f'<span class="badge">{r.get("word_count", "?")} words</span>'
-                        + _meta_badges
+        _chk_col, _exp_col = st.columns([1, 20])
+        with _chk_col:
+            _is_sel = st.checkbox("", key=f"sel_{r['doc_id']}", label_visibility="collapsed",
+                                  help="Select this result for CSV download")
+        with _exp_col:
+            with st.expander(label, key=f"res_exp_{r['doc_id']}"):
+                if _has_content:
+                    _meta_badges = f'<span style="color:#8899aa">{meta}</span>' if meta else ''
+                    if _is_text_search:
+                        _meta_badges = (
+                            f'<span class="badge-green">✦ {r["match_count"]} matches</span>'
+                            f'<span class="badge">{r.get("word_count", "?")} words</span>'
+                            + _meta_badges
+                        )
+                    else:
+                        _meta_badges = f'<span class="badge">{r.get("word_count", "?")} words</span>' + _meta_badges
+                    st.markdown(f'<div class="doc-card-meta">{_meta_badges}</div>', unsafe_allow_html=True)
+                    if r.get('word_count', None) == 0:
+                        # A genuinely-empty transcription is possible, but far more often this
+                        # means the cached copy of this document is stale (e.g. text was added
+                        # in Google Docs after the result was cached). Point the user at the
+                        # per-document "🔄 Reload" button below rather than leaving "0 words"
+                        # unexplained.
+                        st.caption("⚠️ Showing 0 words — if this document has text in Google Docs, "
+                                   "try the 🔄 Reload button below to re-fetch it.")
+                else:
+                    st.markdown(f"""
+                    <div class="doc-card-meta">
+                      <span style="color:#8899aa">{meta}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                if _has_content:
+                    # Word chips are now rendered as a sticky nav strip INSIDE the iframe.
+                    nav_words = list(dict.fromkeys(
+                        _STRIP_MARK.sub('', w) for w in r['matched_words']
+                    )) if r.get('matched_words') else []
+
+                    # Document viewer — with right-click context menu + chip nav injected
+                    _sk = f"feat_{r['doc_id']}"
+                    _pending_words = st.session_state.get(f"{_sk}_pending_words", {})
+                    _saved_words   = st.session_state.get(f"{_sk}_saved_words", {})
+                    _tagged = list(dict.fromkeys(
+                        w for words in list(_pending_words.values()) + list(_saved_words.values())
+                        for w in (words if isinstance(words, list) else [words])
+                        if w
+                    ))
+                    interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        components.html(interactive_html, height=580, scrolling=True)
+                else:
+                    # Filter-browse: no content loaded yet — show a load button
+                    _load_key = f"_load_doc_{r['doc_id']}"
+                    if st.session_state.get(_load_key):
+                        with st.spinner("Loading document…"):
+                            try:
+                                _doc_ver = st.session_state.get('_doc_versions', {}).get(r['doc_id'], 0)
+                                _content = get_doc_content(r['doc_id'], version=_doc_ver)
+                                _sk = f"feat_{r['doc_id']}"
+                                _pw = st.session_state.get(f"{_sk}_pending_words", {})
+                                _sw = st.session_state.get(f"{_sk}_saved_words", {})
+                                _tagged = list(dict.fromkeys(
+                                    w for words in list(_pw.values()) + list(_sw.values())
+                                    for w in (words if isinstance(words, list) else [words])
+                                    if w
+                                ))
+                                _ihtml = inject_interaction_js(_content['display_html'], r['doc_id'], [], _tagged)
+                                import warnings
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore")
+                                    components.html(_ihtml, height=580, scrolling=True)
+                            except Exception as e:
+                                st.error(f"Could not load document: {e}")
+                    else:
+                        st.button("📖 Load document", key=f"btn_load_{r['doc_id']}",
+                                  on_click=lambda k=_load_key: st.session_state.update({k: True}))
+
+                # ── Submit bar (feature tags staged via right-click) ────────────
+                all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
+                if all_rows:
+                    _render_submit_bar(r['doc_id'], r['name'], all_rows)
+
+                _link_col, _reload_col = st.columns([5, 1])
+                with _link_col:
+                    st.markdown(
+                        f"[Open in Google Docs ↗](https://docs.google.com/document/d/{r['doc_id']}/edit)",
+                        unsafe_allow_html=False,
                     )
-                else:
-                    _meta_badges = f'<span class="badge">{r.get("word_count", "?")} words</span>' + _meta_badges
-                st.markdown(f'<div class="doc-card-meta">{_meta_badges}</div>', unsafe_allow_html=True)
-                if r.get('word_count', None) == 0:
-                    # A genuinely-empty transcription is possible, but far more often this
-                    # means the cached copy of this document is stale (e.g. text was added
-                    # in Google Docs after the result was cached). Point the user at the
-                    # per-document "🔄 Reload" button below rather than leaving "0 words"
-                    # unexplained.
-                    st.caption("⚠️ Showing 0 words — if this document has text in Google Docs, "
-                               "try the 🔄 Reload button below to re-fetch it.")
-            else:
-                st.markdown(f"""
-                <div class="doc-card-meta">
-                  <span style="color:#8899aa">{meta}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-            if _has_content:
-                # Word chips are now rendered as a sticky nav strip INSIDE the iframe.
-                nav_words = list(dict.fromkeys(
-                    _STRIP_MARK.sub('', w) for w in r['matched_words']
-                )) if r.get('matched_words') else []
-
-                # Document viewer — with right-click context menu + chip nav injected
-                _sk = f"feat_{r['doc_id']}"
-                _pending_words = st.session_state.get(f"{_sk}_pending_words", {})
-                _saved_words   = st.session_state.get(f"{_sk}_saved_words", {})
-                _tagged = list(dict.fromkeys(
-                    w for words in list(_pending_words.values()) + list(_saved_words.values())
-                    for w in (words if isinstance(words, list) else [words])
-                    if w
-                ))
-                interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
-                import warnings
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    components.html(interactive_html, height=580, scrolling=True)
-            else:
-                # Filter-browse: no content loaded yet — show a load button
-                _load_key = f"_load_doc_{r['doc_id']}"
-                if st.session_state.get(_load_key):
-                    with st.spinner("Loading document…"):
-                        try:
-                            _doc_ver = st.session_state.get('_doc_versions', {}).get(r['doc_id'], 0)
-                            _content = get_doc_content(r['doc_id'], version=_doc_ver)
-                            _sk = f"feat_{r['doc_id']}"
-                            _pw = st.session_state.get(f"{_sk}_pending_words", {})
-                            _sw = st.session_state.get(f"{_sk}_saved_words", {})
-                            _tagged = list(dict.fromkeys(
-                                w for words in list(_pw.values()) + list(_sw.values())
-                                for w in (words if isinstance(words, list) else [words])
-                                if w
-                            ))
-                            _ihtml = inject_interaction_js(_content['display_html'], r['doc_id'], [], _tagged)
-                            import warnings
-                            with warnings.catch_warnings():
-                                warnings.simplefilter("ignore")
-                                components.html(_ihtml, height=580, scrolling=True)
-                        except Exception as e:
-                            st.error(f"Could not load document: {e}")
-                else:
-                    st.button("📖 Load document", key=f"btn_load_{r['doc_id']}",
-                              on_click=lambda k=_load_key: st.session_state.update({k: True}))
-
-            # ── Submit bar (feature tags staged via right-click) ────────────
-            all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
-            if all_rows:
-                _render_submit_bar(r['doc_id'], r['name'], all_rows)
-
-            _link_col, _reload_col = st.columns([5, 1])
-            with _link_col:
-                st.markdown(
-                    f"[Open in Google Docs ↗](https://docs.google.com/document/d/{r['doc_id']}/edit)",
-                    unsafe_allow_html=False,
-                )
-            with _reload_col:
-                # Per-document cache-bust: the search results (incl. word count) are
-                # cached for up to an hour. If a document was just edited directly in
-                # Google Docs (text added/changed outside this app), the cached copy
-                # can look stale — e.g. showing "0 words" even though the live doc has
-                # content. This re-fetches just this one document, without forcing a
-                # full "Clear cache & reload" of the entire corpus.
-                if st.button("🔄 Reload", key=f"btn_reload_{r['doc_id']}",
-                             help="Re-fetch this document fresh from Google Docs "
-                                  "(use this if the word count or text looks stale)"):
-                    _dv = st.session_state.setdefault('_doc_versions', {})
-                    _dv[r['doc_id']] = _dv.get(r['doc_id'], 0) + 1
-                    st.rerun()
+                with _reload_col:
+                    # Per-document cache-bust: the search results (incl. word count) are
+                    # cached for up to an hour. If a document was just edited directly in
+                    # Google Docs (text added/changed outside this app), the cached copy
+                    # can look stale — e.g. showing "0 words" even though the live doc has
+                    # content. This re-fetches just this one document, without forcing a
+                    # full "Clear cache & reload" of the entire corpus.
+                    if st.button("🔄 Reload", key=f"btn_reload_{r['doc_id']}",
+                                 help="Re-fetch this document fresh from Google Docs "
+                                      "(use this if the word count or text looks stale)"):
+                        _dv = st.session_state.setdefault('_doc_versions', {})
+                        _dv[r['doc_id']] = _dv.get(r['doc_id'], 0) + 1
+                        st.rerun()
+        if _is_sel:
+            st.text_input("💬 Comment", key=f"comment_{r['doc_id']}",
+                          placeholder="Add a comment for this transcription…",
+                          label_visibility="collapsed")
 
 # ── Feature browser results ───────────────────────────────────────────────────
 if st.session_state.get('_feat_search') and corpus:
