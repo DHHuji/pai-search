@@ -3320,8 +3320,8 @@ with mid:
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
           <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
           <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
-          <span class="legend-pill"><b>B</b> = בין-שפתיים (b ḅ m ṃ f)</span>
-          <span class="legend-pill"><b>L</b> = למנ״ר (l ḷ m ṃ r ṛ n)</span>
+          <span class="legend-pill"><b>B</b> = Bilabial (b ḅ m ṃ f)</span>
+          <span class="legend-pill"><b>L</b> = Laminal (l ḷ m ṃ r ṛ n)</span>
           <span class="legend-pill"><b>$</b> = any characters (0 or more)</span>
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
