@@ -243,6 +243,8 @@ DIPHTHONGS: list = ['aw','ay','ōw','ēy']
 
 GUTTURALS: set  = {'h','x','ḥ','ʿ','ġ','q'}          # G wildcard
 EMPHATICS: set  = {'ḍ','ḏ̣','ẓ','ṣ'}                  # E wildcard
+BILABIALS: set  = {'b','ḅ','m','ṃ','f'}               # B wildcard (bilabials)
+LAMNR:     set  = {'l','ḷ','m','ṃ','r','ṛ','n'}       # L wildcard (liquids + nasals)
 #  NOTE: '(' / ')' are intentionally excluded — the transcription convention
 #  uses them for inline optional/elided sounds glued directly onto a word
 #  with no space, e.g. "(yi)twaṣṣafiš" or "(i)lli". Treating them as
@@ -254,13 +256,15 @@ WORD_DELIM = re.compile(r'[\s,.:;!?\[\]{}"\'—–#]+|ʿ\u203Fʿ')
 def _alts(items) -> str:
     return '(?:' + '|'.join(re.escape(c) for c in sorted(items, key=len, reverse=True)) + ')'
 
-_C = _alts(CONSONANTS)
-_V = _alts(VOWELS)
-_S = _alts(SHORT_VOWELS)   # v  = short vowel wildcard
-_L = _alts(LONG_VOWELS)    # v̄  = long  vowel wildcard (v + combining macron)
-_D = _alts(DIPHTHONGS)
-_G = _alts(GUTTURALS)
-_E = _alts(EMPHATICS)
+_C     = _alts(CONSONANTS)
+_V     = _alts(VOWELS)
+_S     = _alts(SHORT_VOWELS)   # v  = short vowel wildcard
+_L     = _alts(LONG_VOWELS)    # v̄  = long  vowel wildcard (v + combining macron)
+_D     = _alts(DIPHTHONGS)
+_G     = _alts(GUTTURALS)
+_E     = _alts(EMPHATICS)
+_B     = _alts(BILABIALS)       # B  = bilabial wildcard
+_LAMNR = _alts(LAMNR)           # L  = liquids + nasals (lmnr) wildcard
 
 
 def _pattern_char_to_regex(ch: str) -> str:
@@ -274,6 +278,8 @@ def _pattern_char_to_regex(ch: str) -> str:
     elif ch == 'D': return _D
     elif ch == 'G': return _G
     elif ch == 'E': return _E
+    elif ch == 'B': return _B       # B  = bilabials (b ḅ m ṃ f)
+    elif ch == 'L': return _LAMNR   # L  = liquids + nasals (l ḷ m ṃ r ṛ n)
     elif ch == '$': return '.*?'
     else:           return re.escape(ch)
 
@@ -309,6 +315,7 @@ def pattern_to_regex(pattern: str) -> re.Pattern:
 
     Wildcards : C=consonant  V=vowel (all)  v=short vowel  v̄=long vowel
                 D=diphthong  G=guttural  E=emphatic
+                B=bilabial (b ḅ m ṃ f)  L=liquid/nasal (l ḷ m ṃ r ṛ n)
                 $=any characters (0 or more)
     Anchors   : ^ at start = word must begin here
                 # at end   = word must end here
@@ -3313,6 +3320,8 @@ with mid:
           <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
           <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
           <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
+          <span class="legend-pill"><b>B</b> = בין-שפתיים (b ḅ m ṃ f)</span>
+          <span class="legend-pill"><b>L</b> = למנ״ר (l ḷ m ṃ r ṛ n)</span>
           <span class="legend-pill"><b>$</b> = any characters (0 or more)</span>
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
