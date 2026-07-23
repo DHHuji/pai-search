@@ -847,7 +847,8 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   </div>
   <div id="pai-ctx-scroll"></div>
 </div>
-<div id="pai-ctx-sub" class="ctx-sub"></div>
+<div id="pai-ctx-sub"  class="ctx-sub"></div>
+<div id="pai-ctx-sub2" class="ctx-sub"></div>
 <script>
 (function(){{
   const FEATURES   = {features_js};
@@ -856,12 +857,14 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   const header     = document.getElementById('pai-ctx-header');
   const scroll     = document.getElementById('pai-ctx-scroll');
   const subMenu    = document.getElementById('pai-ctx-sub');
+  const subMenu2   = document.getElementById('pai-ctx-sub2');
   const editInput  = document.getElementById('ctx-edit-input');
   const editBtn    = document.getElementById('ctx-edit-btn');
   const editSect   = document.getElementById('ctx-edit-section');
   let   selText    = '';
   let   selRange   = null;
   let   activeItem = null;
+  let   activeSub2Item = null;
 
   // ── Compute a 0-based occurrence index for `range` within the document's
   //    full text, so the backend can target the SAME occurrence the user
@@ -944,57 +947,99 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     e.stopPropagation();
   }});
 
-  // ── Build feature menu items ────────────────────────────────────────────
+  // ── Build grouped feature menu (3 levels: group → feature → value) ────
+  const GROUP_ORDER = ['PHON.', 'MOR.', 'SYN.', 'LEX.'];
+  const FEAT_GROUPS = {{}};
+  GROUP_ORDER.forEach(function(p) {{ FEAT_GROUPS[p] = []; }});
   FEATURES.forEach(function(fd) {{
-    const item = document.createElement('div');
-    item.className = 'ctx-item';
-
-    if (fd.type === 'bool') {{
-      item.innerHTML = '<span class="ctx-icon">☐</span>'
-        + '<span class="ctx-label">' + fd.name + '</span>'
-        + '<span class="ctx-badge">✓/✗</span>';
-      item.addEventListener('click', function() {{ storeTag(fd.name, true); }});
-      item.addEventListener('mouseenter', function() {{ hideSubMenu(); }});
-    }} else {{
-      item.innerHTML = '<span class="ctx-icon">◈</span>'
-        + '<span class="ctx-label">' + fd.name + '</span>'
-        + '<span class="ctx-badge">▸</span>';
-      item.addEventListener('mouseenter', function() {{
-        activeItem = item;
-        // Build submenu content
-        subMenu.innerHTML = '';
-        fd.opts.forEach(function(opt) {{
-          const si = document.createElement('div');
-          si.className = 'ctx-sub-item';
-          si.textContent = opt;
-          si.addEventListener('click', function(e) {{
-            e.stopPropagation();
-            storeTag(fd.name, opt);
-          }});
-          subMenu.appendChild(si);
-        }});
-        // Position submenu to the right of (or left of) the main menu
-        const mr = menu.getBoundingClientRect();
-        const ir = item.getBoundingClientRect();
-        const vw = window.innerWidth, vh = window.innerHeight;
-        subMenu.style.display = 'block';
-        const sr = subMenu.getBoundingClientRect();
-        let sx = mr.right + 4;
-        if (sx + sr.width > vw) sx = mr.left - sr.width - 4;
-        let sy = ir.top;
-        if (sy + sr.height > vh) sy = vh - sr.height - 8;
-        subMenu.style.left = sx + 'px';
-        subMenu.style.top  = sy + 'px';
-      }});
-    }}
-    scroll.appendChild(item);
+    const grp = GROUP_ORDER.find(function(p) {{ return fd.name.startsWith(p); }});
+    if (grp) FEAT_GROUPS[grp].push(fd);
   }});
 
+  function hideSub2() {{
+    subMenu2.style.display = 'none';
+    subMenu2.innerHTML = '';
+    activeSub2Item = null;
+  }}
   function hideSubMenu() {{
     subMenu.style.display = 'none';
     subMenu.innerHTML = '';
+    hideSub2();
     activeItem = null;
   }}
+
+  GROUP_ORDER.forEach(function(grp) {{
+    const fds = FEAT_GROUPS[grp];
+    if (!fds || !fds.length) return;
+    const item = document.createElement('div');
+    item.className = 'ctx-item';
+    item.innerHTML = '<span class="ctx-icon">⊛</span>'
+      + '<span class="ctx-label">' + grp + '</span>'
+      + '<span class="ctx-badge">' + fds.length + ' ▸</span>';
+    item.addEventListener('mouseenter', function() {{
+      hideSub2();
+      activeItem = item;
+      subMenu.innerHTML = '';
+      fds.forEach(function(fd) {{
+        const si = document.createElement('div');
+        si.className = 'ctx-sub-item';
+        if (fd.type === 'bool') {{
+          si.textContent = fd.name;
+          si.addEventListener('click', function(e) {{
+            e.stopPropagation();
+            storeTag(fd.name, true);
+          }});
+          si.addEventListener('mouseenter', function() {{ hideSub2(); }});
+        }} else {{
+          // Select feature — hover opens a third-level value submenu
+          si.innerHTML = '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">'
+            + fd.name + '</span>'
+            + '<span style="opacity:.5;flex-shrink:0;padding-left:6px">▸</span>';
+          si.style.display = 'flex';
+          si.addEventListener('mouseenter', function() {{
+            activeSub2Item = si;
+            subMenu2.innerHTML = '';
+            fd.opts.forEach(function(opt) {{
+              const si2 = document.createElement('div');
+              si2.className = 'ctx-sub-item';
+              si2.textContent = opt;
+              si2.addEventListener('click', function(e) {{
+                e.stopPropagation();
+                storeTag(fd.name, opt);
+              }});
+              subMenu2.appendChild(si2);
+            }});
+            // Position sub-sub menu to the right of (or left of) the sub menu
+            const sr  = subMenu.getBoundingClientRect();
+            const ir2 = si.getBoundingClientRect();
+            const vw  = window.innerWidth, vh = window.innerHeight;
+            subMenu2.style.display = 'block';
+            const sr2 = subMenu2.getBoundingClientRect();
+            let sx = sr.right + 4;
+            if (sx + sr2.width > vw) sx = sr.left - sr2.width - 4;
+            let sy = ir2.top;
+            if (sy + sr2.height > vh) sy = vh - sr2.height - 8;
+            subMenu2.style.left = sx + 'px';
+            subMenu2.style.top  = sy + 'px';
+          }});
+        }}
+        subMenu.appendChild(si);
+      }});
+      // Position the first-level submenu to the right of (or left of) the main menu
+      const mr = menu.getBoundingClientRect();
+      const ir = item.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+      subMenu.style.display = 'block';
+      const sr = subMenu.getBoundingClientRect();
+      let sx = mr.right + 4;
+      if (sx + sr.width > vw) sx = mr.left - sr.width - 4;
+      let sy = ir.top;
+      if (sy + sr.height > vh) sy = vh - sr.height - 8;
+      subMenu.style.left = sx + 'px';
+      subMenu.style.top  = sy + 'px';
+    }});
+    scroll.appendChild(item);
+  }});
 
   // ── Right-click handler ─────────────────────────────────────────────────
   document.addEventListener('contextmenu', function(e) {{
@@ -1023,7 +1068,7 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   }});
 
   document.addEventListener('click', function(e) {{
-    if (!menu.contains(e.target) && !subMenu.contains(e.target)) {{
+    if (!menu.contains(e.target) && !subMenu.contains(e.target) && !subMenu2.contains(e.target)) {{
       menu.style.display = 'none';
       hideSubMenu();
     }}
@@ -1473,6 +1518,12 @@ def _status_badge(status: str) -> str:
 # use the "➕ Add a feature column" control in the sidebar (it persists to the
 # 'AppFeatureDefs' tab — see get_extra_feature_defs()) rather than editing
 # this hardcoded list, unless you're a developer doing a permanent addition.
+# The four recognised category prefixes.  Any spreadsheet column whose
+# header starts with one of these is automatically treated as a feature
+# column (see get_feature_defs()).  FEATURE_HEADER_DEFS below is now used
+# only as a type/options lookup, not as the authoritative column list.
+FEAT_PREFIXES = ('PHON.', 'MOR.', 'SYN.', 'LEX.')
+
 FEATURE_HEADER_DEFS: list[tuple] = [
     ('PHON. aCC > iCC',                       'aCC>iCC',                              'bool',   None),
     ('PHON. Diphthongs',                      'diphthongs',                           'bool',   None),
@@ -1808,41 +1859,41 @@ def remove_app_feature_def(header_text: str) -> bool:
 @st.cache_data(ttl=600, show_spinner=False)
 def get_feature_defs() -> list[tuple]:
     """
-    Resolve FEATURE_HEADER_DEFS (built-in) plus get_extra_feature_defs()
-    (user-added, via the sidebar) against the LIVE header row of the
-    Recordings sheet, and return the legacy 5-tuple shape
-    (col_index, col_letter, display_name, type, options) that every existing
-    feature-consumer in this file expects — fd[1]=col_letter, fd[2]=display
-    name, fd[3]=type, fd[4]=options. (fd[0] itself is a 1-based index kept
-    only for shape-compatibility; nothing in this file actually reads it.)
+    Dynamically discover feature columns by scanning the live Recordings
+    header row for columns whose header starts with one of FEAT_PREFIXES
+    ('PHON.', 'MOR.', 'SYN.', 'LEX.').
 
-    This is the dynamic replacement for the old hardcoded/positional
-    FEATURE_DEFS: instead of assuming fixed column letters, each feature's
-    *header text* is matched (exact, whitespace-stripped) against the
-    sheet's actual current header row every time this resolves, so the app
-    keeps working correctly even if columns are inserted, removed, or
-    reordered — which is exactly what caused the 2026-06-22 "ق=q shows no
-    results" bug this replaces. A feature whose header text can no longer be
-    found (renamed/removed again) is silently dropped from the resolved
-    list — see get_unresolved_features() to surface that to the user instead
-    of it just vanishing unnoticed.
+    • The header text itself is used as the display name (fd[2]) so the
+      tagging popup, feature search, and doc FEATURES section all use the
+      same string as what's in the spreadsheet — e.g. 'MOR. 3.f.sg pron. ها-'.
+    • Type and option info is looked up from FEATURE_HEADER_DEFS (or the
+      AppFeatureDefs user tab) by exact header-text match.  Columns not in
+      either table default to type='bool', options=None.
+    • Columns are returned in spreadsheet column order, which naturally
+      groups them by prefix when the sheet is laid out that way.
+    • FEATURE_HEADER_DEFS is now a lookup-only table, not the authoritative
+      column list — columns must start with a FEAT_PREFIXES prefix to be
+      included regardless of whether they're in that table.
 
-    Cached for 10 minutes. Called once at module load to populate the
-    FEATURE_DEFS global (see `FEATURE_DEFS = get_feature_defs()` below), and
-    transparently again on every script rerun once the cache expires — i.e.
-    "each time the app loads the data... it uses this list to look for the
-    right column."
+    Returns 5-tuples: (1-based-idx, col_letter, display_name, type, options).
+    Cached for 10 minutes.
     """
     headers = _get_sheet_headers()
-    header_map = {h.strip(): i for i, h in enumerate(headers)}
+    # Build type/options lookup keyed by stripped header text
+    known_meta: dict = {
+        ht.strip(): (dt, opts)
+        for ht, _, dt, opts in FEATURE_HEADER_DEFS
+    }
+    for ht, _dn, dt, opts in get_extra_feature_defs():
+        known_meta.setdefault(ht.strip(), (dt, opts))
 
-    all_defs = list(FEATURE_HEADER_DEFS) + list(get_extra_feature_defs())
     resolved = []
-    for header_text, display_name, ftype, options in all_defs:
-        idx0 = header_map.get(header_text.strip())
-        if idx0 is None:
+    for idx, header in enumerate(headers):
+        ht = header.strip()
+        if not any(ht.startswith(p) for p in FEAT_PREFIXES):
             continue
-        resolved.append((idx0 + 1, _col_letter(idx0), display_name, ftype, options))
+        dtype, options = known_meta.get(ht, ('bool', None))
+        resolved.append((idx + 1, _col_letter(idx), ht, dtype, options))
     return resolved
 
 
@@ -2301,6 +2352,11 @@ def update_gdoc_features_section(
             in_features = True
             continue
         if in_features:
+            # Bare group-header lines ('PHON.', 'MOR.', 'SYN.', 'LEX.') are
+            # part of the block but carry no data — skip them; they'll be
+            # regenerated on write.
+            if text.strip() in FEAT_PREFIXES:
+                continue
             # End condition: non-empty text that isn't a known feature line
             if text and not any(text.startswith(fn) for fn in all_known_names):
                 feat_end = start_idx
@@ -2387,12 +2443,21 @@ def update_gdoc_features_section(
             line += '   +'
         updated_lines[name] = line
 
-    # ── Reconstruct the FEATURES block in FEATURE_DEFS order ──────────────────
+    # ── Reconstruct the FEATURES block with section headers ───────────────────
+    # Features are emitted in spreadsheet column order (FEATURE_DEFS order).
+    # A bare prefix header ('PHON.', 'MOR.', …) is inserted once before the
+    # first feature of each group that has at least one line to write.
     lines = ['FEATURES:']
+    emitted_prefixes: set = set()
     for fd in FEATURE_DEFS:
-        if fd[2] in updated_lines:
-            lines.append(updated_lines[fd[2]])
-    # Preserve any lines not in FEATURE_DEFS (e.g. doc-only features already there)
+        if fd[2] not in updated_lines:
+            continue
+        prefix = next((p for p in FEAT_PREFIXES if fd[2].startswith(p)), None)
+        if prefix and prefix not in emitted_prefixes:
+            lines.append(prefix)
+            emitted_prefixes.add(prefix)
+        lines.append(updated_lines[fd[2]])
+    # Preserve any doc-only feature lines (e.g. '"was"') that were already there
     fd_names = {fd[2] for fd in FEATURE_DEFS}
     for name, line in existing_lines.items():
         if name not in fd_names and name in updated_lines:
