@@ -1900,34 +1900,44 @@ def get_feature_defs() -> list[tuple]:
 @st.cache_data(ttl=600, show_spinner=False)
 def get_unresolved_features() -> list[str]:
     """
-    Display names of built-in or user-added features whose header text could
-    NOT be found in the live Recordings header row right now (e.g. the
-    column was renamed or deleted since it was registered). Meant to be
-    surfaced in the sidebar so this is noticed immediately instead of a
-    feature silently vanishing from search/tagging.
+    Header texts of user-registered features (from the AppFeatureDefs tab)
+    that can no longer be found in the live Recordings sheet.
+
+    Prefix-based columns (PHON. / MOR. / SYN. / LEX.) are auto-discovered
+    by get_feature_defs() and don't need tracking here — if the column
+    exists it will be found; if it was removed it simply won't appear, and
+    no warning is needed.  FEATURE_HEADER_DEFS is now a lookup-only table
+    (not an expected-column list), so its entries are also excluded.
+    Only manually-registered extras (AppFeatureDefs tab) are checked.
     """
     headers = _get_sheet_headers()
     header_set = {h.strip() for h in headers}
-    all_defs = list(FEATURE_HEADER_DEFS) + list(get_extra_feature_defs())
-    return [display_name for header_text, display_name, *_ in all_defs
+    return [display_name for header_text, display_name, *_ in get_extra_feature_defs()
             if header_text.strip() not in header_set]
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_unclaimed_headers() -> list[str]:
     """
-    Live Recordings header texts that aren't already claimed by a known
-    feature (FEATURE_HEADER_DEFS or a previously user-added one) or by a
-    known non-feature metadata column (COL_NAMES). These are the candidates
-    offered in the sidebar's "➕ Add a feature column" picker when someone has
-    manually added a new column to the sheet that the app doesn't know about
-    yet.
+    Live Recordings header texts that aren't already automatically covered
+    or claimed, offered in the sidebar's "➕ Add a feature column" picker.
+
+    Excluded from results (i.e. considered already 'claimed'):
+    • Headers starting with a FEAT_PREFIX — auto-discovered by get_feature_defs()
+    • Headers in FEATURE_HEADER_DEFS (legacy lookup table)
+    • Headers registered via the AppFeatureDefs tab
+    • Known non-feature metadata columns (COL_NAMES)
     """
     headers = _get_sheet_headers()
     claimed = {h.strip() for h, *_ in FEATURE_HEADER_DEFS}
     claimed |= {h.strip() for h, *_ in get_extra_feature_defs()}
     claimed |= {v.strip() for v in COL_NAMES.values()}
-    return [h for h in headers if h.strip() and h.strip() not in claimed]
+    return [
+        h for h in headers
+        if h.strip()
+        and h.strip() not in claimed
+        and not any(h.strip().startswith(p) for p in FEAT_PREFIXES)
+    ]
 
 
 # Resolve the live feature list now (and again each cache window on every
@@ -3138,8 +3148,10 @@ with st.sidebar:
         )
     with st.expander("➕ Add a feature column"):
         st.caption(
-            "If someone added a new feature column directly in the "
-            "spreadsheet, register it here so the app can tag/search it too."
+            "Columns whose header starts with PHON. / MOR. / SYN. / LEX. "
+            "are discovered automatically — no registration needed. "
+            "Use this only for other columns (non-prefix) or to override "
+            "the type/options of an existing prefix column."
         )
         _unclaimed = get_unclaimed_headers()
         _CUSTOM_OPT = "✏️ Type a custom header name…"
