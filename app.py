@@ -1703,13 +1703,17 @@ def _col_letter(idx0: int) -> str:
     return letters
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def _get_sheet_headers() -> list[str]:
     """
     Read just the header row (row 1) of the Recordings sheet. Shared by
     get_column_indices() and get_feature_defs() so both resolve column
     positions dynamically from the LIVE header text without each making its
-    own duplicate Sheets API call. Cached for 1 hour.
+    own duplicate Sheets API call.
+
+    TTL=120s (2 min): row-1 is a tiny read; short TTL means newly-added or
+    renamed feature columns appear automatically within ~2 minutes, without
+    needing a manual 'Clear cache' in most cases.
     """
     _, _, sheets_svc = get_services()
     result = sheets_svc.spreadsheets().values().get(
@@ -1863,19 +1867,21 @@ def remove_app_feature_def(header_text: str) -> bool:
     return True
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _infer_column_types(unknown_cols: tuple) -> dict:
     """
     Batch-read cell values for columns whose type is not in FEATURE_HEADER_DEFS
     or AppFeatureDefs, and infer bool vs. select from the actual data.
 
     unknown_cols is a tuple of (col_letter, header_text) pairs — it is the
-    cache key, so this function re-fetches only when the set of unknown column
-    names changes (e.g. after adding a new column to the sheet).  A manual
-    'Clear cache & reload' also triggers a re-fetch.
+    cache key, so this function re-fetches when the set of unknown column
+    names changes (e.g. after adding a new column to the sheet).
+
+    TTL=300s (5 min): also re-checks periodically so a column that was initially
+    empty (inferred as bool) gets correctly re-classified once values are added.
+    A manual 'Clear cache & reload' also triggers a re-fetch.
 
     Returns {header_text: (type, options)}.
-    No TTL — result is valid as long as the column names don't change.
     """
     if not unknown_cols:
         return {}
