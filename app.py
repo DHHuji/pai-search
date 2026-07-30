@@ -1873,20 +1873,25 @@ def get_feature_defs() -> list[tuple]:
     • The header text itself is used as the display name (fd[2]) so the
       tagging popup, feature search, and doc FEATURES section all use the
       same string as what's in the spreadsheet — e.g. 'MOR. 3.f.sg pron. ها-'.
-    • Type and option info is looked up from FEATURE_HEADER_DEFS (or the
-      AppFeatureDefs user tab) by exact header-text match.  Columns not in
-      either table default to type='bool', options=None.
-    • Columns are returned in spreadsheet column order, which naturally
-      groups them by prefix when the sheet is laid out that way.
-    • FEATURE_HEADER_DEFS is now a lookup-only table, not the authoritative
-      column list — columns must start with a FEAT_PREFIXES prefix to be
-      included regardless of whether they're in that table.
+    • Type and option info is looked up first from FEATURE_HEADER_DEFS (or
+      the AppFeatureDefs user tab) by exact header-text match.
+    • For columns not found in either table, the function batch-reads all
+      existing cell values from those columns and infers the type:
+        – If every non-empty value looks boolean (+/-/true/false/yes/no/1/0)
+          → type='bool', options=None
+        – If any other values are present → type='select', options=<sorted
+          distinct non-boolean values found in the column>
+      This means newly-added multi-choice columns become 'select' features
+      automatically, with their real options, without any manual registration.
+    • Columns are returned in spreadsheet column order.
+    • FEATURE_HEADER_DEFS is a lookup-only table, not the authoritative
+      column list.
 
     Returns 5-tuples: (1-based-idx, col_letter, display_name, type, options).
     Cached for 10 minutes.
     """
     headers = _get_sheet_headers()
-    # Build type/options lookup keyed by stripped header text
+    # Build type/options lookup from the static table + user-registered extras
     known_meta: dict = {
         ht.strip(): (dt, opts)
         for ht, _, dt, opts in FEATURE_HEADER_DEFS
@@ -1894,13 +1899,46 @@ def get_feature_defs() -> list[tuple]:
     for ht, _dn, dt, opts in get_extra_feature_defs():
         known_meta.setdefault(ht.strip(), (dt, opts))
 
-    resolved = []
+    # First pass: collect prefix-matching columns in sheet order
+    prefix_cols: list = []   # [(idx, col_letter, ht), ...]
     for idx, header in enumerate(headers):
         ht = header.strip()
-        if not any(ht.startswith(p) for p in FEAT_PREFIXES):
-            continue
-        dtype, options = known_meta.get(ht, ('bool', None))
-        resolved.append((idx + 1, _col_letter(idx), ht, dtype, options))
+        if any(ht.startswith(p) for p in FEAT_PREFIXES):
+            prefix_cols.append((idx, _col_letter(idx), ht))
+
+    # For columns whose type is not yet known, infer it from actual cell values.
+    # Values that look boolean (+/-/true/false) → bool.
+    # Any other non-empty value → select, with those values as options.
+    _BOOL_VALS: frozenset = frozenset({
+        '+', '-', 'true', 'false', 'yes', 'no', 'TRUE', 'FALSE', '1', '0',
+    })
+    inferred_meta: dict = {}
+    unknown = [(col, ht) for _, col, ht in prefix_cols if ht not in known_meta]
+    if unknown:
+        try:
+            _, _, sheets_svc = get_services()
+            batch = sheets_svc.spreadsheets().values().batchGet(
+                spreadsheetId=SPREADSHEET_ID,
+                ranges=[f'Recordings!{col}2:{col}' for col, _ in unknown],
+                majorDimension='COLUMNS',
+            ).execute()
+            for (col, ht), vr in zip(unknown, batch.get('valueRanges', [])):
+                col_vals = (vr.get('values') or [[]])[0]
+                distinct = {v.strip() for v in col_vals if v.strip()}
+                non_bool = sorted(v for v in distinct if v not in _BOOL_VALS)
+                if non_bool:
+                    inferred_meta[ht] = ('select', non_bool)
+                else:
+                    inferred_meta[ht] = ('bool', None)
+        except Exception:
+            pass  # Fall back to bool for all unknown columns
+
+    resolved = []
+    for idx, col_letter, ht in prefix_cols:
+        dtype, options = (known_meta.get(ht)
+                          or inferred_meta.get(ht)
+                          or ('bool', None))
+        resolved.append((idx + 1, col_letter, ht, dtype, options))
     return resolved
 
 
