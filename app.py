@@ -1891,16 +1891,56 @@ def _infer_column_types(unknown_cols: tuple) -> dict:
     result: dict = {}
     try:
         _, _, sheets_svc = get_services()
-        batch = sheets_svc.spreadsheets().values().batchGet(
-            spreadsheetId=SPREADSHEET_ID,
-            ranges=[f'Recordings!{col}2:{col}' for col, _ in unknown_cols],
-            majorDimension='COLUMNS',
-        ).execute()
-        for (col, ht), vr in zip(unknown_cols, batch.get('valueRanges', [])):
-            col_vals = (vr.get('values') or [[]])[0]
-            distinct  = {v.strip() for v in col_vals if v.strip()}
-            non_bool  = sorted(v for v in distinct if v not in _BOOL_VALS)
-            result[ht] = ('select', non_bool) if non_bool else ('bool', None)
+
+        # ── Step 1: read data-validation rules on row 2 of each unknown column.
+        # Google Sheets dropdowns have ONE_OF_LIST validation — we can read the
+        # options directly, even when the column is completely empty (no tagged rows).
+        dv_options: dict = {}   # ht → list[str]
+        try:
+            dv_ranges = [f'Recordings!{col}2' for col, _ in unknown_cols]
+            dv_resp = sheets_svc.spreadsheets().get(
+                spreadsheetId=SPREADSHEET_ID,
+                ranges=dv_ranges,
+                includeGridData=True,
+                fields='sheets.data.rowData.values.dataValidation',
+            ).execute()
+            sheet_data_list = (dv_resp.get('sheets') or [{}])[0].get('data', [])
+            for i, (col, ht) in enumerate(unknown_cols):
+                if i >= len(sheet_data_list):
+                    break
+                row_data = sheet_data_list[i].get('rowData') or []
+                if not row_data:
+                    continue
+                cell_dv = (row_data[0].get('values') or [{}])[0].get('dataValidation', {})
+                cond = cell_dv.get('condition', {})
+                if cond.get('type') == 'ONE_OF_LIST':
+                    opts = [v.get('userEnteredValue', '').strip()
+                            for v in cond.get('values', [])]
+                    dv_options[ht] = [o for o in opts if o]
+        except Exception:
+            pass  # DV read failed — fall through to value-based inference
+
+        # ── Step 2: value-based inference for columns without DV rules.
+        cols_no_dv = tuple((col, ht) for col, ht in unknown_cols if ht not in dv_options)
+        if cols_no_dv:
+            batch = sheets_svc.spreadsheets().values().batchGet(
+                spreadsheetId=SPREADSHEET_ID,
+                ranges=[f'Recordings!{col}2:{col}' for col, _ in cols_no_dv],
+                majorDimension='COLUMNS',
+            ).execute()
+            for (col, ht), vr in zip(cols_no_dv, batch.get('valueRanges', [])):
+                col_vals = (vr.get('values') or [[]])[0]
+                distinct  = {v.strip() for v in col_vals if v.strip()}
+                non_bool  = sorted(v for v in distinct if v not in _BOOL_VALS)
+                result[ht] = ('select', non_bool) if non_bool else ('bool', None)
+
+        # ── Step 3: merge — DV-derived options take precedence over inference.
+        for _, ht in unknown_cols:
+            if ht in dv_options:
+                result[ht] = ('select', sorted(dv_options[ht]))
+            elif ht not in result:
+                result[ht] = ('bool', None)
+
     except Exception:
         pass  # Fall back to bool for any column we couldn't read
     return result
