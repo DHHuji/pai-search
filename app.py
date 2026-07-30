@@ -1863,32 +1863,59 @@ def remove_app_feature_def(header_text: str) -> bool:
     return True
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(show_spinner=False)
+def _infer_column_types(unknown_cols: tuple) -> dict:
+    """
+    Batch-read cell values for columns whose type is not in FEATURE_HEADER_DEFS
+    or AppFeatureDefs, and infer bool vs. select from the actual data.
+
+    unknown_cols is a tuple of (col_letter, header_text) pairs — it is the
+    cache key, so this function re-fetches only when the set of unknown column
+    names changes (e.g. after adding a new column to the sheet).  A manual
+    'Clear cache & reload' also triggers a re-fetch.
+
+    Returns {header_text: (type, options)}.
+    No TTL — result is valid as long as the column names don't change.
+    """
+    if not unknown_cols:
+        return {}
+    _BOOL_VALS: frozenset = frozenset({
+        '+', '-', 'true', 'false', 'yes', 'no', 'TRUE', 'FALSE', '1', '0',
+    })
+    result: dict = {}
+    try:
+        _, _, sheets_svc = get_services()
+        batch = sheets_svc.spreadsheets().values().batchGet(
+            spreadsheetId=SPREADSHEET_ID,
+            ranges=[f'Recordings!{col}2:{col}' for col, _ in unknown_cols],
+            majorDimension='COLUMNS',
+        ).execute()
+        for (col, ht), vr in zip(unknown_cols, batch.get('valueRanges', [])):
+            col_vals = (vr.get('values') or [[]])[0]
+            distinct  = {v.strip() for v in col_vals if v.strip()}
+            non_bool  = sorted(v for v in distinct if v not in _BOOL_VALS)
+            result[ht] = ('select', non_bool) if non_bool else ('bool', None)
+    except Exception:
+        pass  # Fall back to bool for any column we couldn't read
+    return result
+
+
 def get_feature_defs() -> list[tuple]:
     """
     Dynamically discover feature columns by scanning the live Recordings
     header row for columns whose header starts with one of FEAT_PREFIXES
     ('PHON.', 'MOR.', 'SYN.', 'LEX.').
 
-    • The header text itself is used as the display name (fd[2]) so the
-      tagging popup, feature search, and doc FEATURES section all use the
-      same string as what's in the spreadsheet — e.g. 'MOR. 3.f.sg pron. ها-'.
-    • Type and option info is looked up first from FEATURE_HEADER_DEFS (or
-      the AppFeatureDefs user tab) by exact header-text match.
-    • For columns not found in either table, the function batch-reads all
-      existing cell values from those columns and infers the type:
-        – If every non-empty value looks boolean (+/-/true/false/yes/no/1/0)
-          → type='bool', options=None
-        – If any other values are present → type='select', options=<sorted
-          distinct non-boolean values found in the column>
-      This means newly-added multi-choice columns become 'select' features
-      automatically, with their real options, without any manual registration.
-    • Columns are returned in spreadsheet column order.
-    • FEATURE_HEADER_DEFS is a lookup-only table, not the authoritative
-      column list.
+    • The header text itself is used as the display name (fd[2]).
+    • Type/options come from FEATURE_HEADER_DEFS or AppFeatureDefs if known.
+    • For unknown columns, _infer_column_types() reads their actual values.
+    • NOT decorated with @st.cache_data — runs on every Streamlit rerun but
+      cheaply, because _get_sheet_headers() and _infer_column_types() are
+      themselves cached.  This ensures FEATURE_DEFS is always in sync with
+      the header cache: as soon as _get_sheet_headers() refreshes (TTL or
+      manual clear), the next rerun picks up new/removed columns immediately.
 
     Returns 5-tuples: (1-based-idx, col_letter, display_name, type, options).
-    Cached for 10 minutes.
     """
     headers = _get_sheet_headers()
     # Build type/options lookup from the static table + user-registered extras
@@ -1899,39 +1926,16 @@ def get_feature_defs() -> list[tuple]:
     for ht, _dn, dt, opts in get_extra_feature_defs():
         known_meta.setdefault(ht.strip(), (dt, opts))
 
-    # First pass: collect prefix-matching columns in sheet order
+    # Collect prefix-matching columns in sheet order
     prefix_cols: list = []   # [(idx, col_letter, ht), ...]
     for idx, header in enumerate(headers):
         ht = header.strip()
         if any(ht.startswith(p) for p in FEAT_PREFIXES):
             prefix_cols.append((idx, _col_letter(idx), ht))
 
-    # For columns whose type is not yet known, infer it from actual cell values.
-    # Values that look boolean (+/-/true/false) → bool.
-    # Any other non-empty value → select, with those values as options.
-    _BOOL_VALS: frozenset = frozenset({
-        '+', '-', 'true', 'false', 'yes', 'no', 'TRUE', 'FALSE', '1', '0',
-    })
-    inferred_meta: dict = {}
-    unknown = [(col, ht) for _, col, ht in prefix_cols if ht not in known_meta]
-    if unknown:
-        try:
-            _, _, sheets_svc = get_services()
-            batch = sheets_svc.spreadsheets().values().batchGet(
-                spreadsheetId=SPREADSHEET_ID,
-                ranges=[f'Recordings!{col}2:{col}' for col, _ in unknown],
-                majorDimension='COLUMNS',
-            ).execute()
-            for (col, ht), vr in zip(unknown, batch.get('valueRanges', [])):
-                col_vals = (vr.get('values') or [[]])[0]
-                distinct = {v.strip() for v in col_vals if v.strip()}
-                non_bool = sorted(v for v in distinct if v not in _BOOL_VALS)
-                if non_bool:
-                    inferred_meta[ht] = ('select', non_bool)
-                else:
-                    inferred_meta[ht] = ('bool', None)
-        except Exception:
-            pass  # Fall back to bool for all unknown columns
+    # Infer type for columns not in known_meta (cached by column-name tuple)
+    unknown = tuple((col, ht) for _, col, ht in prefix_cols if ht not in known_meta)
+    inferred_meta = _infer_column_types(unknown)
 
     resolved = []
     for idx, col_letter, ht in prefix_cols:
