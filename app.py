@@ -1972,6 +1972,22 @@ def get_feature_defs() -> list[tuple]:
     for ht, _dn, dt, opts in get_extra_feature_defs():
         known_meta.setdefault(ht.strip(), (dt, opts))
 
+    # Build a secondary lookup keyed by the name with its FEAT_PREFIX stripped.
+    # This lets a new "LEX. want" column automatically inherit the type/options
+    # from an old "want" entry in FEATURE_HEADER_DEFS or AppFeatureDefs, even
+    # when the exact prefixed name isn't in known_meta yet.
+    def _strip_prefix(s: str) -> str:
+        for p in FEAT_PREFIXES:
+            if s.startswith(p):
+                return s[len(p):].strip()
+        return s
+
+    known_meta_stripped: dict = {
+        _strip_prefix(k): v
+        for k, v in known_meta.items()
+        if _strip_prefix(k) != k   # only index entries that actually had a prefix
+    }
+
     # Collect prefix-matching columns in sheet order
     prefix_cols: list = []   # [(idx, col_letter, ht), ...]
     for idx, header in enumerate(headers):
@@ -1979,15 +1995,21 @@ def get_feature_defs() -> list[tuple]:
         if any(ht.startswith(p) for p in FEAT_PREFIXES):
             prefix_cols.append((idx, _col_letter(idx), ht))
 
-    # Infer type for columns not in known_meta (cached by column-name tuple)
-    unknown = tuple((col, ht) for _, col, ht in prefix_cols if ht not in known_meta)
+    # Infer type for columns not resolvable from known_meta (exact or stripped)
+    unknown = tuple(
+        (col, ht) for _, col, ht in prefix_cols
+        if ht not in known_meta and _strip_prefix(ht) not in known_meta_stripped
+    )
     inferred_meta = _infer_column_types(unknown)
 
     resolved = []
     for idx, col_letter, ht in prefix_cols:
-        dtype, options = (known_meta.get(ht)
-                          or inferred_meta.get(ht)
-                          or ('bool', None))
+        dtype, options = (
+            known_meta.get(ht)                          # 1. exact match (e.g. "LEX. want")
+            or known_meta_stripped.get(_strip_prefix(ht))  # 2. prefix-stripped (e.g. "want")
+            or inferred_meta.get(ht)                    # 3. inferred from data / DV rules
+            or ('bool', None)                           # 4. fallback
+        )
         resolved.append((idx + 1, col_letter, ht, dtype, options))
     return resolved
 
@@ -2258,11 +2280,19 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
 # ════════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_all_sheet_features(version: int = 0) -> dict:
+def _get_all_sheet_features(version: int = 0, _col_set: tuple = ()) -> dict:
     """
     Read every feature column (all rows) and return
     {sheet_row: {col_letter: value}}. Cached for 1 hour; pass a different
     version to bust the cache after a write.
+
+    _col_set is a tuple of (col_letter, header_text) pairs derived from
+    FEATURE_DEFS and passed as an explicit parameter so that it becomes part
+    of the Streamlit cache key.  When a column is renamed or a new prefix-
+    based column appears — causing FEATURE_DEFS to change — _col_set changes
+    too, which immediately invalidates this cache and forces a fresh batchGet.
+    Without this, a rename would silently serve 1-hour-stale feature data even
+    though _get_sheet_headers() already picked up the change.
 
     Each feature is read via its OWN open-ended column range (e.g.
     'Recordings!V2:V'), all fetched together in a single batchGet call —
@@ -2306,8 +2336,9 @@ def get_sheet_features(sheet_row: int) -> dict:
     Uses the batch cache (_get_all_sheet_features) so no extra API call is made —
     all rows are loaded in one request and kept for 1 hour.
     """
-    version = st.session_state.get('_features_version', 0)
-    all_features = _get_all_sheet_features(version=version)
+    version  = st.session_state.get('_features_version', 0)
+    col_set  = tuple((fd[1], fd[2]) for fd in FEATURE_DEFS)
+    all_features = _get_all_sheet_features(version=version, _col_set=col_set)
     return all_features.get(sheet_row, {fd[1]: None for fd in FEATURE_DEFS})
 
 
