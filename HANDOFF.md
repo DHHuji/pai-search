@@ -248,12 +248,40 @@ Features שמופיעים בdoc FEATURES section אבל **אין להם עמוד
 
 ## Test Suite
 
-```
-/sessions/laughing-eager-ramanujan/tests_full.py
+שני קבצים, שניהם בתיקיית הפרויקט. הרץ את שניהם אחרי כל שינוי:
+
+```bash
+python tests_full.py    # 83 טסטים — רגרסיה כללית
+python tests_deep.py    # 80 טסטים — הלוגיקה של feature-columns, cache, wildcards
 ```
 
-רץ עם: `python tests_full.py`  
-מכיל 83 טסטים. משתמש ב-`importlib.util.spec_from_file_location` לטעינת app.py עם stubs מלאים לStreamlit וGoogle APIs.
+שניהם משתמשים ב-`importlib.util.spec_from_file_location` לטעינת app.py עם stubs מלאים ל-Streamlit ול-Google APIs — אין צורך בcredentials או ברשת.
+
+`tests_deep.py` מחולק לסקשנים:
+
+| סקשן | מה נבדק |
+|---|---|
+| A | `_infer_column_types()` — נתיב ה-Data Validation, כולל עמודה ריקה עם dropdown |
+| B | `get_feature_defs()` — ירושת type דרך prefix-strip, סדר עמודות, col_letter |
+| C | `_get_all_sheet_features()` — ביטול cache בשינוי שם עמודה |
+| D | TTL של כל ה-caches |
+| E | End-to-end: שינוי שם עמודה ישנה לשם עם prefix |
+| F | Wildcards — כולל בדיקה שכל חברי B/L/E נמצאים ב-CONSONANTS |
+| G | עקביות בין המקלדת, ה-legend, וה-sets ב-Python |
+| H | FEATURES block במסמכים |
+| I | Invariants על FEATURE_HEADER_DEFS (כפילויות, התנגשויות, type/options תקינים) |
+
+---
+
+## באגים שתוקנו (2026-08-08)
+
+### 1. ה-wildcard `C` פספס עיצורים מודגשים — באג חיפוש שקט
+`ḅ ṃ ḷ ṛ ḏ̣` היו חברים ב-`BILABIALS`/`LAMNR`/`EMPHATICS` אבל **לא** ב-`CONSONANTS`. התוצאה: חיפוש `CvC` החזיר **0 תוצאות** למילים כמו `ḅal`, `ṃan`, `ḷaw`, `ṛas` — בלי שום הודעת שגיאה. תוקן ע"י הוספתם ל-`CONSONANTS`.
+
+**Invariant לשמירה**: כל חבר ב-B/L/E/G חייב להיות גם ב-`CONSONANTS`. טסט F5 אוכף את זה — אם מוסיפים wildcard חדש, ודא שהתווים שלו נמצאים ב-`CONSONANTS`.
+
+### 2. ירושת type דרך prefix-strip הייתה מאונדקסת הפוך
+`known_meta_stripped` נבנה רק מרשומות שכבר היה להן prefix, ולכן חיפוש `LEX. "want"` → `"want"` מעולם לא מצא את הרשומה הבסיסית `"want"`, והעמודה נפלה ל-fallback של `bool`. תוקן — עכשיו כל רשומה מאונדקסת לפי שמה המקוצר, ורשומות בסיסיות (ללא prefix) מקבלות עדיפות.
 
 ---
 
