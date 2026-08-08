@@ -235,6 +235,12 @@ div[data-testid="stAlert"][data-baseweb="notification"] {
 CONSONANTS: set = {
     'b','t','ṯ','ǧ','ž','ḥ','x','d','ḏ','r','z','s','š','ṣ','ḍ','ẓ','ṭ',
     'ġ','f','q','g','k','č','ḳ','l','m','n','h','w','y','ʿ','ʾ','p',
+    # Velarised / emphatic variants. These MUST be here: without them the 'C'
+    # (any consonant) wildcard silently skipped every word containing one, so
+    # a pattern like 'CvC' returned no match for 'ḅal', 'ṃan', 'ḷaw', 'ṛas'.
+    # They are also members of BILABIALS / LAMNR / EMPHATICS below, and every
+    # member of those sets must be a consonant.
+    'ḅ','ṃ','ḷ','ṛ','ḏ̣',
 }
 SHORT_VOWELS: set = {'a', 'e', 'i', 'u', 'o', 'ə'}
 LONG_VOWELS:  set = {'ā', 'ē', 'ī', 'ō', 'ū', 'ā̈', 'ɑ̄'}  # ɑ̄ = variant encoding of ā̈
@@ -1982,11 +1988,19 @@ def get_feature_defs() -> list[tuple]:
                 return s[len(p):].strip()
         return s
 
-    known_meta_stripped: dict = {
-        _strip_prefix(k): v
-        for k, v in known_meta.items()
-        if _strip_prefix(k) != k   # only index entries that actually had a prefix
-    }
+    # Index EVERY known entry by its prefix-stripped name.  Bare entries (which
+    # strip to themselves) are what make the rename case work: a sheet column
+    # renamed from '"want"' to 'LEX. "want"' strips back to '"want"' and finds
+    # the original definition.  Bare entries are inserted last so they win any
+    # tie against an already-prefixed entry that strips to the same name.
+    known_meta_stripped: dict = {}
+    for k, v in known_meta.items():
+        sk = _strip_prefix(k)
+        if sk != k:                      # prefixed entry — index it first
+            known_meta_stripped.setdefault(sk, v)
+    for k, v in known_meta.items():
+        if _strip_prefix(k) == k:        # bare entry — takes precedence
+            known_meta_stripped[k] = v
 
     # Collect prefix-matching columns in sheet order
     prefix_cols: list = []   # [(idx, col_letter, ht), ...]
