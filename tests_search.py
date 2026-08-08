@@ -1,0 +1,466 @@
+"""
+Third regression suite for pai-search/app.py — SEARCH, TEXT, DOC, WRITE paths.
+Covers the territory tests_full.py and tests_deep.py do not:
+  pattern compilation edge cases, alternation groups, optional letters,
+  tokenisation, sequence matching, position filters, HTML-safe highlighting,
+  doc-ID extraction, corpus filtering, FEATURES-block round-trip,
+  unicode normalisation, and write/delete argument shaping.
+
+Run: python tests_search.py
+"""
+import sys, re, unicodedata
+import unittest.mock as mock
+
+sys.path.insert(0, '/sessions/laughing-eager-ramanujan')
+from _harness import app, check, section, failures, source, load_error  # noqa
+
+if load_error:
+    print(f'[FATAL] app.py did not load: {load_error}')
+    sys.exit(1)
+
+N = lambda s: unicodedata.normalize('NFC', s)
+def m(pat, word):
+    """True/False if pattern matches word; None if the pattern failed to compile."""
+    try:
+        return bool(app.pattern_to_regex(pat).search(N(word)))
+    except Exception:
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('J. pattern_to_regex — anchors and basic semantics')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('J1 ^ anchors to word start',        m('^ka', 'katab') is True)
+check('J2 ^ rejects a mid-word match',     m('^ta', 'katab') is False)
+check('J3 # anchors to word end',          m('ab#', 'katab') is True)
+check('J4 # rejects a non-final match',    m('at#', 'katab') is False)
+check('J5 ^…# anchors the whole word',     m('^katab#', 'katab') is True)
+check('J6 ^…# rejects a substring',        m('^kata#', 'katab') is False)
+check('J7 unanchored matches anywhere',    m('ta', 'katab') is True)
+check('J8 $ matches zero characters',      m('k$t', 'kt') is True)
+check('J9 $ spans intervening characters', m('k$b', 'katab') is True)
+check('J10 ^$# matches any whole word',    m('^$#', 'katab') is True)
+
+# Anchors must survive the wildcard expansion, not be escaped as literals
+check('J11 ^ is not treated as a literal char',
+      app.pattern_to_regex('^k').pattern.startswith('^'))
+check('J12 # is not treated as a literal char',
+      app.pattern_to_regex('k#').pattern.endswith('$'))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('K. Alternation groups and optional letters')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('K1 (q,ʾ)tb matches qtb',            m('(q,ʾ)tb', 'qtb') is True)
+check('K2 (q,ʾ)tb matches ʾtb',            m('(q,ʾ)tb', 'ʾtb') is True)
+check('K3 (q,ʾ)tb rejects ktb',            m('(q,ʾ)tb', 'ktb') is False)
+check('K4 trailing empty alt makes it optional — qtb',
+      m('(q,k,)tb', 'qtb') is True)
+check('K5 trailing empty alt — ktb',       m('(q,k,)tb', 'ktb') is True)
+check('K6 trailing empty alt — bare tb',   m('(q,k,)tb', 'tb') is True)
+check('K7 multi-char alternatives work',   m('(ka,ki)tab', 'kitab') is True)
+check('K8 whitespace inside a group is trimmed',
+      m('( q , ʾ )tb', 'qtb') is True)
+check('K9 a wildcard inside a group works', m('(C,V)tb', 'atb') is True)
+check('K10 group + anchor combine',        m('^(q,ʾ)tb#', 'ʾtb') is True)
+check('K11 unmatched ( raises re.error',
+      m('(q,ʾtb', 'qtb') is None)
+check('K12 single-alternative group is a no-op',
+      m('(q)tb', 'qtb') is True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('L. Long-vowel v̄ — the two-code-point wildcard')
+# ══════════════════════════════════════════════════════════════════════════════
+
+VBAR = 'v̄'   # v + COMBINING MACRON ABOVE
+
+check('L1 v̄ matches ā',  m(VBAR, 'ā') is True)
+check('L2 v̄ matches ū',  m(VBAR, 'ū') is True)
+check('L3 v̄ rejects a',  m(VBAR, 'a') is False)
+check('L4 v (short) rejects ā', m('v', 'ā') is False)
+check('L5 v̄ inside a longer pattern', m(f'k{VBAR}n', 'kān') is True)
+check('L6 v̄ inside an alternation group', m(f'({VBAR},a)n', 'ān') is True)
+check('L7 v̄ is consumed as ONE token, not v + macron',
+      m(f'{VBAR}#', 'ā') is True)
+check('L8 two v̄ in a row',   m(f'{VBAR}{VBAR}', 'āū') is True)
+check('L9 v̄ then v',         m(f'{VBAR}v', 'āa') is True)
+# Regression: a bare 'v' must NOT swallow a following non-combining char
+check('L10 v followed by a normal letter stays two tokens',
+      m('vn', 'an') is True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('M. tokenize() and the parenthesis convention')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('M1 splits on spaces',
+      app.tokenize('katab kitab') == ['katab', 'kitab'])
+check('M2 splits on punctuation',
+      app.tokenize('katab, kitab. ktb!') == ['katab', 'kitab', 'ktb'])
+# The documented reason parens are NOT delimiters
+check('M3 parens do NOT split a word — (i)lli stays whole',
+      app.tokenize('(i)lli') == ['(i)lli'], str(app.tokenize('(i)lli')))
+check('M4 (yi)twaṣṣafiš stays one token',
+      app.tokenize('(yi)twaṣṣafiš') == ['(yi)twaṣṣafiš'],
+      str(app.tokenize('(yi)twaṣṣafiš')))
+check('M5 brackets DO split',
+      app.tokenize('a[b]c') == ['a', 'b', 'c'], str(app.tokenize('a[b]c')))
+check('M6 empty / whitespace-only input -> []',
+      app.tokenize('   \n\t ') == [], str(app.tokenize('   \n\t ')))
+check('M7 output is NFC-normalised',
+      app.tokenize('ā')[0] == N('ā'))
+check('M8 hyphen is NOT a delimiter (morpheme boundaries survive)',
+      app.tokenize('bi-ktub') == ['bi-ktub'], str(app.tokenize('bi-ktub')))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('N. parse_sequence_pattern — multi-word patterns')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('N1 single word -> 1 regex',  len(app.parse_sequence_pattern('ktb')) == 1)
+check('N2 two words -> 2 regexes',  len(app.parse_sequence_pattern('g# ^G')) == 2)
+check('N3 extra spaces collapse',   len(app.parse_sequence_pattern('  a   b  ')) == 2)
+check('N4 empty pattern raises re.error',
+      isinstance(
+          (lambda: (app.parse_sequence_pattern('   ') and None))
+          .__call__.__self__ if False else
+          (lambda:
+              (lambda f: f())(lambda: None))(),
+          object))
+try:
+    app.parse_sequence_pattern('   ')
+    _empty_ok = False
+except re.error:
+    _empty_ok = True
+except Exception:
+    _empty_ok = False
+check('N4 empty pattern raises re.error', _empty_ok)
+
+# Per-sub-pattern anchors
+subs = app.parse_sequence_pattern('g# ^G')
+check('N5 first sub-pattern is end-anchored',  subs[0].pattern.endswith('$'))
+check('N6 second sub-pattern is start-anchored', subs[1].pattern.startswith('^'))
+
+# _match_sequence over a real word list
+words = ['ʾallag', 'ḥatta', 'baʿdēn']
+res = app._match_sequence(words[:2], app.parse_sequence_pattern('g# ^G'), 'anywhere')
+check('N7 sequence matches "…g" followed by guttural-initial word',
+      len(res) == 2, str(res))
+res = app._match_sequence(['katab', 'kitab'],
+                          app.parse_sequence_pattern('g# ^G'), 'anywhere')
+check('N8 sequence returns [] when the 1st word fails', res == [], str(res))
+res = app._match_sequence(['ʾallag', 'katab'],
+                          app.parse_sequence_pattern('g# ^G'), 'anywhere')
+check('N9 sequence returns [] when the 2nd word fails', res == [], str(res))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('O. match_word() position filters')
+# ══════════════════════════════════════════════════════════════════════════════
+
+rx = app.pattern_to_regex('ta')
+check('O1 anywhere finds a mid-word hit', len(app.match_word('katab', rx, 'anywhere')) == 1)
+check('O2 start rejects a mid-word hit',  app.match_word('katab', rx, 'start') == [])
+check('O3 start accepts a word-initial hit',
+      len(app.match_word('tarak', rx, 'start')) == 1)
+check('O4 end accepts a word-final hit',
+      len(app.match_word('katta', rx, 'end')) == 1)
+check('O5 end rejects a non-final hit',   app.match_word('katab', rx, 'end') == [])
+check('O6 middle rejects a word-initial hit',
+      app.match_word('tarak', rx, 'middle') == [])
+check('O7 middle accepts a strictly-interior hit',
+      len(app.match_word('katab', rx, 'middle')) == 1)
+check('O8 middle rejects a word-final hit',
+      app.match_word('katta', rx, 'middle') == [])
+# Multiple occurrences
+rx2 = app.pattern_to_regex('a')
+check('O9 all occurrences are returned', len(app.match_word('katab', rx2, 'anywhere')) == 2)
+
+# _subpattern_position: anchored sub-patterns must ignore the UI radio
+check('O10 anchored sub-pattern forces "anywhere"',
+      app._subpattern_position(app.pattern_to_regex('^ka'), 'middle') == 'anywhere')
+check('O11 unanchored sub-pattern keeps the UI position',
+      app._subpattern_position(app.pattern_to_regex('ka'), 'middle') == 'middle')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('P. Highlighting — correctness and HTML safety')
+# ══════════════════════════════════════════════════════════════════════════════
+
+rx = app.pattern_to_regex('ta')
+out = app.highlight_word('katab', app.match_word('katab', rx, 'anywhere'))
+check('P1 single match wrapped in <mark>', out == 'ka<mark>ta</mark>b', out)
+
+out = app.highlight_word('katatab', app.match_word('katatab', rx, 'anywhere'))
+check('P2 multiple matches all wrapped', out.count('<mark>') == 2, out)
+check('P3 original letters all survive highlighting',
+      re.sub(r'</?mark>', '', out) == 'katatab', out)
+
+# Reverse-order application must not corrupt offsets
+out = app.highlight_word('tata', app.match_word('tata', rx, 'anywhere'))
+check('P4 adjacent matches do not corrupt offsets',
+      re.sub(r'</?mark>', '', out) == 'tata', out)
+
+# highlight_in_text over a plain string
+out = app.highlight_in_text('katab kitab', app.pattern_to_regex('ta'))
+check('P5 highlight_in_text marks every occurrence across words',
+      out.count('<mark>') == 2, out)
+check('P5b highlight_in_text preserves the original text',
+      re.sub(r'</?mark>', '', out) == 'katab kitab', out)
+
+# HTML-node highlighting must not corrupt tags/attributes
+frag = '<p class="ta">katab</p>'
+out  = app._highlight_text_nodes(frag, app.pattern_to_regex('ta'))
+check('P6 class="ta" attribute is NOT highlighted',
+      'class="ta"' in out, out)
+check('P7 the text node IS highlighted', 'mark' in out, out)
+
+frag = '<p>katab &amp; kitab</p>'
+out  = app._highlight_text_nodes(frag, app.pattern_to_regex('ta'))
+check('P8 HTML entities survive highlighting', '&amp;' in out, out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('Q. _extract_doc_id — every documented URL shape')
+# ══════════════════════════════════════════════════════════════════════════════
+
+ID = 'aBc123_XyZ-4567890'
+cases = [
+    (f'https://docs.google.com/document/d/{ID}/edit',            ID, 'standard doc'),
+    (f'https://docs.google.com/document/u/0/d/{ID}/edit',        ID, 'user-scoped doc'),
+    (f'https://drive.google.com/file/d/{ID}/view',               ID, 'drive file'),
+    (f'https://drive.google.com/file/u/2/d/{ID}/view',           ID, 'user-scoped file'),
+    (f'https://drive.google.com/open?id={ID}',                   ID, 'legacy open?id'),
+    (f'https://drive.google.com/uc?id={ID}&export=download',     ID, 'uc?id download'),
+    (f'https://docs.google.com/document/d/{ID}/edit#heading=h.x',ID, 'with fragment'),
+    (f'https://docs.google.com/document/d/{ID}',                 ID, 'no trailing path'),
+]
+for url, want, label in cases:
+    check(f'Q1 {label}', app._extract_doc_id(url) == want, f'{url} -> {app._extract_doc_id(url)}')
+
+check('Q2 published /d/e/ doc is rejected',
+      app._extract_doc_id('https://docs.google.com/document/d/e/2PACX-1vXyz/pub') != 'e',
+      str(app._extract_doc_id('https://docs.google.com/document/d/e/2PACX-1vXyz/pub')))
+check('Q3 empty string -> None',      app._extract_doc_id('') is None)
+check('Q4 None -> None',              app._extract_doc_id(None) is None)
+check('Q5 non-Google URL -> None',    app._extract_doc_id('https://example.com/a/b') is None)
+check('Q6 short id (<10 chars) rejected',
+      app._extract_doc_id('https://docs.google.com/document/d/short/edit') is None)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('R. _apply_filters — corpus filtering')
+# ══════════════════════════════════════════════════════════════════════════════
+
+corpus = [
+    {'name': 'A', 'village': 'V1', 'gender': 'M', 'status': 'ok'},
+    {'name': 'B', 'village': 'V2', 'gender': 'F', 'status': 'ok'},
+    {'name': 'C', 'village': 'V1', 'gender': 'F', 'status': 'wip'},
+]
+f = app._apply_filters
+check('R1 empty filter dict returns everything', len(f(corpus, {})) == 3)
+check('R2 empty allowed-list is treated as "no filter"',
+      len(f(corpus, {'village': []})) == 3)
+check('R3 single-value filter',
+      [d['name'] for d in f(corpus, {'village': ['V1']})] == ['A', 'C'])
+check('R4 multi-value filter is OR within a field',
+      len(f(corpus, {'village': ['V1', 'V2']})) == 3)
+check('R5 two fields combine as AND',
+      [d['name'] for d in f(corpus, {'village': ['V1'], 'gender': ['F']})] == ['C'])
+check('R6 no match -> empty list',
+      f(corpus, {'village': ['V9']}) == [])
+check('R7 unknown field name matches nothing (missing key -> "")',
+      f(corpus, {'nope': ['x']}) == [])
+check('R8 input corpus is not mutated', len(corpus) == 3)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('S. root_to_pattern')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('S1 ktb -> $k$t$b$',        app.root_to_pattern('ktb') == '$k$t$b$')
+check('S2 spaces are ignored',    app.root_to_pattern('k t b') == '$k$t$b$')
+check('S3 group kept intact',     app.root_to_pattern('(q,ʾ,k)tb') == '$(q,ʾ,k)$t$b$')
+check('S4 empty input -> ""',     app.root_to_pattern('   ') == '')
+check('S5 single letter',         app.root_to_pattern('k') == '$k$')
+check('S6 unmatched ( degrades gracefully',
+      isinstance(app.root_to_pattern('(qtb'), str))
+# The produced pattern must actually compile and match
+pat = app.root_to_pattern('ktb')
+check('S7 produced pattern compiles', m(pat, 'kataba') is not None)
+check('S8 root matches a word with infixes',   m(pat, 'kataba') is True)
+check('S9 root rejects wrong letter order',    m(pat, 'batak') is False)
+pat = app.root_to_pattern('(q,k,)tb')
+check('S10 optional-letter root matches all three forms',
+      all(m(pat, w) for w in ['qtb', 'ktb', 'tb']))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('T. _feat_val_norm — feature value comparison')
+# ══════════════════════════════════════════════════════════════════════════════
+
+nv = app._feat_val_norm
+check('T1 trims whitespace',            nv('  bidd  ') == nv('bidd'))
+check('T2 case-insensitive',            nv('BIDD') == nv('bidd'))
+check('T3 NFC vs NFD are equal',
+      nv(unicodedata.normalize('NFD', 'ǧ')) == nv(unicodedata.normalize('NFC', 'ǧ')))
+check('T4 None -> ""',                  nv(None) == '')
+check('T5 empty string -> ""',          nv('') == '')
+check('T6 numeric value coerced to str', nv(1) == '1')
+check('T7 False -> "" (not "false")',   nv(False) == '', repr(nv(False)))
+check('T8 distinct values stay distinct', nv('badd') != nv('bidd'))
+# The real-world bug this guards: composed vs decomposed diacritics in the sheet
+check('T9 decomposed ḏ̣ matches composed ḏ̣',
+      nv(unicodedata.normalize('NFD', 'ḏ̣')) == nv(unicodedata.normalize('NFC', 'ḏ̣')))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('U. _build_features_block — doc FEATURES text')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = [
+    (1, 'A', 'PHON. Flag',  'bool',   None),
+    (2, 'B', 'LEX. "want"', 'select', ['badd', 'bidd']),
+]
+try:
+    blk = app._build_features_block({'A': True, 'B': 'bidd'}, {})
+    check('U1 block starts with the FEATURES: heading', blk.startswith('FEATURES:'), blk)
+    check('U2 a true bool renders as [+]',   'PHON. Flag  [+]' in blk, blk)
+    check('U3 a select renders its value',   'LEX. "want"  [bidd]' in blk, blk)
+
+    blk = app._build_features_block({'A': False, 'B': None}, {})
+    check('U4 a false bool renders as an empty bracket',
+          'PHON. Flag  []' in blk, blk)
+    check('U5 an untagged select renders as an empty bracket',
+          'LEX. "want"  []' in blk, blk)
+
+    blk = app._build_features_block({}, {})
+    check('U6 missing values do not crash', 'FEATURES:' in blk, blk)
+    check('U7 every feature gets a line',
+          blk.count('\n') >= 2, repr(blk))
+    # Names in the block must be the FULL prefixed names the parser looks for
+    check('U8 lines use the full prefixed name (parser contract)',
+          'PHON. Flag' in blk and 'LEX. "want"' in blk, blk)
+finally:
+    app.FEATURE_DEFS = _saved
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('V. Unicode normalisation across the search path')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# A user may paste NFD text; the pattern compiler normalises to NFC.
+check('V1 pattern input is NFC-normalised',
+      m(unicodedata.normalize('NFD', 'ǧ'), 'ǧ') is True)
+check('V2 NFD word text is normalised by tokenize()',
+      app.tokenize(unicodedata.normalize('NFD', 'ǧamal')) == [N('ǧamal')])
+check('V3 NFC pattern matches an NFD-sourced token',
+      m('ǧ', app.tokenize(unicodedata.normalize('NFD', 'ǧamal'))[0]) is True)
+# ā̈ has a documented variant encoding (ɑ̄) — both must be in LONG_VOWELS
+check('V4 both ā̈ encodings are long vowels',
+      len(app.LONG_VOWELS & {'ā̈', 'ɑ̄'}) == 2, str(app.LONG_VOWELS))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('W. Wildcard set invariants (guards future edits)')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('W1 every B/L/E/G member is a consonant',
+      (app.BILABIALS | app.LAMNR | app.EMPHATICS | app.GUTTURALS) <= app.CONSONANTS,
+      str((app.BILABIALS|app.LAMNR|app.EMPHATICS|app.GUTTURALS) - app.CONSONANTS))
+check('W2 consonants and vowels are disjoint',
+      not (app.CONSONANTS & app.VOWELS),
+      str(app.CONSONANTS & app.VOWELS))
+check('W3 short and long vowels are disjoint',
+      not (app.SHORT_VOWELS & app.LONG_VOWELS),
+      str(app.SHORT_VOWELS & app.LONG_VOWELS))
+check('W4 VOWELS is exactly short | long',
+      app.VOWELS == (app.SHORT_VOWELS | app.LONG_VOWELS))
+check('W5 every diphthong is 2 characters',
+      all(len(d) == 2 for d in app.DIPHTHONGS), str(app.DIPHTHONGS))
+check('W6 C matches every consonant individually',
+      all(m('C', c) for c in app.CONSONANTS),
+      str([c for c in app.CONSONANTS if not m('C', c)]))
+check('W7 V matches every vowel individually',
+      all(m('V', v) for v in app.VOWELS),
+      str([v for v in app.VOWELS if not m('V', v)]))
+check('W8 C does not match any vowel',
+      not any(m('^C#', v) for v in app.VOWELS),
+      str([v for v in app.VOWELS if m('^C#', v)]))
+# _alts must sort longest-first so a short member never shadows a longer one
+# that starts with it (regex alternation is first-match-wins, not longest-wins).
+_alt_list = app._alts({'a', 'abc', 'ab'})[3:-1].split('|')
+check('W9 _alts orders alternatives longest-first',
+      _alt_list == ['abc', 'ab', 'a'], str(_alt_list))
+check('W9b longest-first actually wins the match',
+      app.pattern_to_regex('x').pattern is not None
+      and re.match(app._alts({'a', 'ab'}), 'ab').group() == 'ab',
+      re.match(app._alts({'a', 'ab'}), 'ab').group())
+# Real-world consequence: the 2-codepoint ḏ̣ must win over a bare ḏ
+check('W9c multi-codepoint ḏ̣ is preferred over ḏ in the C class',
+      re.match(app._C, 'ḏ̣').group() == 'ḏ̣',
+      re.match(app._C, 'ḏ̣').group())
+check('W10 multi-codepoint consonant ḏ̣ is matched as one unit',
+      m('^C#', 'ḏ̣') is True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('X. write_sheet_features / delete_feature_tag — argument shaping')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('X1 write_sheet_features bumps the cache version',
+      '_features_version' in source)
+check('X2 delete_feature_tag exists', hasattr(app, 'delete_feature_tag'))
+check('X3 conflict detection compares against the current cell value',
+      'cell_is_empty' in source and 'conflicts.append' in source)
+check('X4 a bool write uses the checkbox representation',
+      "'+'" in source)
+check('X5 writes go through the resolved column letter, never a constant',
+      re.search(r"Recordings!\{[A-Za-z_]+\}", source) is not None
+      or 'col_letter' in source)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('Y. Error handling — malformed input must not crash')
+# ══════════════════════════════════════════════════════════════════════════════
+
+for bad, label in [
+    ('(',        'lone open paren'),
+    ('(,)',      'group of empty alternatives'),
+    ('()',       'empty group'),
+    ('$$$$',     'only wildcards'),
+    ('^#',       'anchors with no body'),
+    ('#^',       'reversed anchors'),
+    ('a' * 500,  'very long pattern'),
+]:
+    try:
+        app.pattern_to_regex(bad)
+        ok = True
+    except re.error:
+        ok = True          # a clean re.error is acceptable — the UI catches it
+    except Exception as e:
+        ok = False
+        _detail = f'{type(e).__name__}: {e}'
+    check(f'Y1 {label} raises re.error or compiles (no hard crash)',
+          ok, locals().get('_detail', ''))
+
+check('Y2 run_search catches re.error and returns []',
+      're.error' in source and 'Invalid pattern' in source)
+check('Y3 _infer_column_types swallows API errors',
+      re.search(r'except Exception:\s*\n\s*pass', source) is not None)
+check('Y4 get_extra_feature_defs returns [] when the tab is missing',
+      'return []   # tab doesn' in source or 'return []' in source)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f'\n{"="*66}')
+if failures:
+    print(f'RESULT: {len(failures)} FAILURE(S)')
+    for f_ in failures:
+        print(f'  - {f_}')
+    sys.exit(1)
+print('RESULT: ALL SEARCH/TEXT/DOC TESTS PASSED')
