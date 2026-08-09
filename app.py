@@ -1241,8 +1241,32 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
         hint.style.color = '#fbbf24';
         hint.textContent = 'exception for which feature?';
         subMenu.appendChild(hint);
-        FEATURES.forEach(function(fd) {{
-          subMenu.appendChild(makeFeatureItem(fd, subMenu2, subMenu, true, 'but'));
+
+        // Same four categories as the normal tagging branch, so the two
+        // paths are navigated identically: BUT -> group -> feature.
+        // (No value level here: in BUT mode the word itself is the tag.)
+        const butGroups = GROUP_ORDER.concat(UNGROUPED.length ? ['__other__'] : []);
+        butGroups.forEach(function(grp) {{
+          const gfds = grp === '__other__' ? UNGROUPED : FEAT_GROUPS[grp];
+          if (!gfds || !gfds.length) return;
+          const gi = document.createElement('div');
+          gi.className = 'ctx-sub-item';
+          gi.style.display = 'flex';
+          gi.style.alignItems = 'center';
+          gi.innerHTML =
+            '<span style="color:#fbbf24;padding-right:8px">⚠</span>' +
+            '<span style="flex:1">' + (grp === '__other__' ? 'Other' : grp) + '</span>' +
+            '<span class="ctx-badge">' + gfds.length + ' ▸</span>';
+          gi.addEventListener('mouseenter', function() {{
+            activeSub2Item = gi;
+            subMenu2.innerHTML = '';
+            gfds.forEach(function(fd) {{
+              subMenu2.appendChild(
+                makeFeatureItem(fd, null, null, false, 'but'));
+            }});
+            positionSub(subMenu2, subMenu, gi);
+          }});
+          subMenu.appendChild(gi);
         }});
         positionSub(subMenu, menu, butItem);
       }});

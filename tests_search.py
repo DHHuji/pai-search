@@ -1097,7 +1097,17 @@ check('AJ21 deletion is suppressed when an exception is being recorded',
 # ── tagging UI ──
 check('AJ22 storeTag carries a kind',            "function storeTag(featureName, value, kind)" in source)
 check('AJ23 the popup has a BUT branch',         'BUT — exception' in source)
-check('AJ24 the BUT branch lists every feature', "makeFeatureItem(fd, subMenu2, subMenu, true, 'but')" in source)
+check('AJ24 the BUT branch is grouped into the four categories',
+      'butGroups' in source
+      and 'GROUP_ORDER.concat(UNGROUPED' in source)
+check('AJ24b BUT groups open their features one level further out',
+      "makeFeatureItem(fd, null, null, false, 'but')" in source
+      and 'positionSub(subMenu2, subMenu, gi)' in source)
+check('AJ24c BUT and normal tagging use the same category list',
+      source.count('GROUP_ORDER.concat(UNGROUPED.length') == 2,
+      str(source.count('GROUP_ORDER.concat(UNGROUPED.length')))
+check('AJ24d features with no prefix stay reachable under BUT too',
+      "grp === '__other__' ? UNGROUPED : FEAT_GROUPS[grp]" in source)
 check('AJ25 in BUT mode one click tags (no value submenu)',
       "if (kind === 'but' || fd.type === 'bool')" in source)
 check('AJ26 search results offer a BUT shortcut',
