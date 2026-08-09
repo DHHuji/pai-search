@@ -253,7 +253,7 @@ Features שמופיעים בdoc FEATURES section אבל **אין להם עמוד
 ```bash
 python tests_full.py     # 85 טסטים — רגרסיה כללית
 python tests_deep.py     # 85 טסטים — feature-columns, cache, wildcards
-python tests_search.py   # 283 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value, chips, קיבוץ
+python tests_search.py   # 313 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value, chips, קיבוץ, CSV
 ```
 
 `_harness.py` מכיל את ה-stubs המשותפים (Streamlit + Google APIs). `tests_search.py` מייבא ממנו; שני האחרים מכילים עותק משלהם.
@@ -289,6 +289,7 @@ python tests_search.py   # 283 טסטים — חיפוש, טקסט, מסמכים
 | AA–AD | תיוג מרובה-ערכים: פרסור, מיזוג, התאמה בחיפוש, חיווט בקוד |
 | AE–AF | פורמט multi-select נייטיב (chips) ותצוגת chips בממשק |
 | AG–AH | חיפוש פיצ'רים בפופ-אפ (כולל תקינות ה-JS המרונדר) וקיבוץ לקטגוריות |
+| AI | ייצוא CSV: מילות דוגמה, והבחנה בין ריק ל-FALSE |
 
 ---
 
@@ -433,6 +434,47 @@ renderSearch(q)      — מצב תוצאות חיפוש שטוח
 מפתחות ה-session state: `feat_browse_grp_PHON` וכו' (הישן `feat_browse_names` הוסר).
 
 ⚠️ טסט AH11 אוכף ש-`_FEAT_GROUP_LABELS` מכיל **בדיוק** את `FEAT_PREFIXES`. אם מוסיפים קידומת חדשה ל-`FEAT_PREFIXES` ושוכחים כאן — קטגוריה שלמה תיעלם מהמסך הזה בשקט.
+
+---
+
+## ייצוא CSV
+
+כל פיצ'ר תורם **שתי עמודות**:
+
+| עמודה | תוכן |
+|---|---|
+| `MOR. Fem. Ending` | הערך/ים מהגיליון |
+| `MOR. Fem. Ending — example` | **המילה שתויגה** כדוגמה |
+
+### מאיפה מגיעות מילות הדוגמה
+
+מילות הדוגמה קיימות **רק בבלוק FEATURES שב-Google Doc** — הגיליון מחזיק רק את הערך. `get_doc_feature_examples()` קורא אותן מה-HTML של המסמך, שכבר נשמר ב-cache ע"י `get_doc_content()` בזמן החיפוש — ולכן **אין קריאת API נוספת** למסמכים שהופיעו בתוצאות.
+
+`_split_feature_line(text, fd)` מפרסר שורת FEATURES ומחזיר `(example_words, value)`. הוא מטפל בשני פורמטים היסטוריים:
+
+```
+חדש:  "name  [word1; word2]   value"
+ישן:   "name  [value]  word1, word2"
+```
+
+### ⚠️ ריק מול FALSE — הבחנה קריטית
+
+| ערך בגיליון | ב-CSV | משמעות |
+|---|---|---|
+| `None` (תא לא נגוע) | **ריק** | לא הוערך |
+| `False` | `FALSE` | הוערך ונמצא שלא קיים |
+| `True` | `TRUE` | הוערך ונמצא שקיים |
+
+בעבר תא לא-נגוע יוצא כ-`FALSE`, מה שהמציא בשקט נתונים שליליים על פני כל הקורפוס. אל תקרוס את שתי המשמעויות לאחת.
+
+### פונקציות משותפות
+
+```python
+_csv_feature_header()              # שמות העמודות (ערך + example לכל פיצ'ר)
+_csv_feature_cells(sheet_row, doc_id)   # התאים בסדר תואם
+```
+
+⚠️ **שלושת כותבי ה-CSV** (תוצאות חיפוש, תוצאות מסומנות, feature browse) שיכפלו בעבר את הלוגיקה inline — ולכן התיקון היה צריך להיעשות בשלושה מקומות. כולם עוברים עכשיו דרך שתי הפונקציות האלה. **אל תשכפל שוב.** טסט AI27 נכשל אם מופיע `'TRUE' if` יותר מפעם אחת בקובץ.
 
 ---
 
