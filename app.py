@@ -4007,11 +4007,16 @@ with mid:
                         key=f"feat_browse_val_{_sf}",
                         label_visibility="visible",
                         placeholder="Any value…",
-                        help="Pick one or more. A document matches if it is "
-                             "tagged with any of them.",
+                        help="Leave empty to match any tagged value. Pick one "
+                             "or more to narrow it — a document matches if it "
+                             "is tagged with any of them.",
                     )
-                    if _vals:
-                        _feat_conditions.append((_sf, _fd, list(_vals)))
+                    # An EMPTY picker means "any value" — which is what its
+                    # placeholder promises. Appending the condition regardless
+                    # is what lets a feature be searched on its own, and is
+                    # what enables the BUT checkbox below (it is disabled while
+                    # there are no conditions at all).
+                    _feat_conditions.append((_sf, _fd, list(_vals)))
 
             _logic = 'AND'
             if len(_feat_conditions) > 1:
@@ -4766,10 +4771,9 @@ if st.session_state.get('_feat_search') and corpus:
         if _fd[3] == 'bool':
             _cond_labels.append(f"<b>{_fn}</b> = ✓")
         else:
-            _chips = ' '.join(
-                f'<span class="val-chip">{v}</span>'
-                for v in (_fv if isinstance(_fv, (list, tuple)) else [_fv])
-            )
+            _vs = _fv if isinstance(_fv, (list, tuple)) else [_fv]
+            _chips = (' '.join(f'<span class="val-chip">{v}</span>' for v in _vs)
+                      if _vs else '<span class="val-chip is-empty">any value</span>')
             _cond_labels.append(f"<b>{_fn}</b> = {_chips}")
     _logic_sep = f"&nbsp; <span style='color:#60aee8'>{_logic}</span> &nbsp;"
     st.markdown(f"""
@@ -4817,11 +4821,15 @@ if st.session_state.get('_feat_search') and corpus:
                     # composed vs. decomposed diacritics still compare equal.
                     _wanted = _fv if isinstance(_fv, (list, tuple)) else [_fv]
                     _is_empty = not str(_cur or '').strip()
-                    _hit = any(
-                        _is_empty if _w == FEAT_NONE_OPTION
-                        else _feat_value_matches(_cur, _w, _fd[4])
-                        for _w in _wanted
-                    )
+                    if not _wanted:
+                        # no value picked -> "any value": tagged with anything
+                        _hit = not _is_empty
+                    else:
+                        _hit = any(
+                            _is_empty if _w == FEAT_NONE_OPTION
+                            else _feat_value_matches(_cur, _w, _fd[4])
+                            for _w in _wanted
+                        )
                 _cond_results.append(_hit)
                 _matched_vals[_fn] = _cur
 
@@ -4860,7 +4868,7 @@ if st.session_state.get('_feat_search') and corpus:
             if d[3] == 'bool':
                 return f"{n}=✓"
             vals = v if isinstance(v, (list, tuple)) else [v]
-            return f"{n}={' / '.join(str(x) for x in vals)}"
+            return f"{n}={' / '.join(str(x) for x in vals) if vals else 'any value'}"
         _desc = f" {_logic} ".join(_fmt_cond(n, d, v) for n, d, v in _feat_conditions)
         st.info(f"No documents found matching: {_desc}")
 

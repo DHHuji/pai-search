@@ -765,8 +765,19 @@ check('AF9 the collapsed label splits multi-values with " / "',
       "' / '.join(_parts)" in source)
 check('AF10 condition description handles a list of values',
       '_fmt_cond' in source)
-check('AF11 picking no value adds no condition (feature is skipped)',
-      'if _vals:\n                        _feat_conditions.append' in source)
+# An empty value picker means "any value" — matching its placeholder. It must
+# still produce a CONDITION, otherwise selecting a feature on its own does
+# nothing and the BUT checkbox (disabled while there are no conditions) can
+# never be ticked.
+check('AF11 selecting a feature alone still produces a condition',
+      'if _vals:\n                        _feat_conditions.append' not in source
+      and '_feat_conditions.append((_sf, _fd, list(_vals)))' in source)
+check('AF11b an empty picker matches any tagged value',
+      'if not _wanted:' in source and '_hit = not _is_empty' in source)
+check('AF11c the label reads "any value" when nothing is picked',
+      "is-empty\">any value" in source)
+check('AF11d the description reads "any value" too',
+      "if vals else 'any value'" in source)
 check('AF12 "not tagged" is still selectable alongside real values',
       '[FEAT_NONE_OPTION] + (_fd[4] or [])' in source)
 check('AF13 FEAT_NONE_OPTION is handled inside the any() test',
