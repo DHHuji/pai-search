@@ -415,9 +415,12 @@ section('X. write_sheet_features / delete_feature_tag — argument shaping')
 check('X1 write_sheet_features bumps the cache version',
       '_features_version' in source)
 check('X2 delete_feature_tag exists', hasattr(app, 'delete_feature_tag'))
+# Scope this to write_sheet_features: the auto-tag scanner legitimately builds
+# its own `conflicts` report, which is a different thing entirely.
+_wsf = source.split('def write_sheet_features')[1].split('\ndef ')[0]
 check('X3 select writes merge instead of blocking on a conflict',
-      '_merge_feat_values(cur_val, new_val, fd[4])' in source
-      and 'conflicts.append' not in source)
+      '_merge_feat_values(cur_val, new_val, fd[4])' in _wsf
+      and 'conflicts' not in _wsf)
 check('X4 a bool write uses the checkbox representation',
       "'+'" in source)
 check('X5 writes go through the resolved column letter, never a constant',
@@ -1293,6 +1296,171 @@ check('AL15 the background preload runs once per session, not per edit',
       "not st.session_state.get('_preload_started')" in source)
 check('AL16 doc content is cached per (doc_id, version)',
       'def get_doc_content(doc_id: str, version: int = 0)' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AM. Auto-tag from the transcription table')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_AT_DEFS = [
+    (1, 'A', 'LEX. "He is saying"',     'select', ['biʾūl', 'ygūl']),
+    (2, 'B', 'LEX. "Rooster/Roosters"', 'select', ['dīk / dyūk', 'dīč / dyuk']),
+    (3, 'C', 'LEX. "Heavy"',            'select', ['tʾīl']),
+    (4, 'D', 'LEX. "Coffee"',           'select', ['ʾahwi']),
+    (5, 'E', 'PHON. *q',                'select', ['q', 'ʾ', 'g']),
+    (6, 'F', 'PHON. *k',                'select', ['k', 'č', 'k~č']),
+]
+def _tbl(saying, rooster, heavy, coffee):
+    return ('<table><tr><td>يقول</td><td>ديك \\ ديوك</td><td>ثقيل</td>'
+            '<td>قهوة</td></tr>'
+            f'<tr><td>{saying}</td><td>{rooster}</td><td>{heavy}</td>'
+            f'<td>{coffee}</td></tr></table>')
+
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = _AT_DEFS
+try:
+    # ── parsing the real document's table ──
+    _real = _tbl('biʾūl', 'dīk-dyūk', 'tʾīl', 'Select')
+    with mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': _real}):
+        _t = app.parse_doc_feature_table('d')
+    check('AM1 the table is found and read',
+          _t.get('LEX. "He is saying"') == 'biʾūl', str(_t))
+    check('AM2 the Arabic headings map to features despite the slash',
+          _t.get('LEX. "Rooster/Roosters"') == 'dīk-dyūk', str(_t))
+    check('AM3 "Select" placeholders are treated as unfilled',
+          'LEX. "Coffee"' not in _t, str(_t))
+    with mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': '<p>no table</p>'}):
+        check('AM4 a document with no table yields {}',
+              app.parse_doc_feature_table('d2') == {})
+
+    # ── the four rules ──
+    _d = lambda v: app.derive_phon_from_table(v)[0]
+    _u = lambda v: app.derive_phon_from_table(v)[1]
+    _R = 'LEX. "Rooster/Roosters"'
+    _full = {'LEX. "He is saying"': 'biʾūl', 'LEX. "Coffee"': 'ʾahwi',
+             'LEX. "Heavy"': 'tʾīl'}
+    check('AM5 rule 1 fires on all three pieces of evidence',
+          _d(_full) == {'PHON. *q': 'ʾ'}, str(_d(_full)))
+    for _missing in ('LEX. "Coffee"', 'LEX. "Heavy"', 'LEX. "He is saying"'):
+        _partial = {k: v for k, v in _full.items() if k != _missing}
+        check(f'AM6 rule 1 does NOT fire without {_missing.replace(chr(34), "")}',
+              'PHON. *q' not in _d(_partial), str(_d(_partial)))
+    check('AM7 rule 1 needs saying=biʾūl exactly',
+          'PHON. *q' not in _d({**_full, 'LEX. "He is saying"': 'ygūl'}))
+    for _c in ('ʾahwa', 'ʾahwe', 'ʾahwi'):
+        check(f'AM8 rule 1 accepts coffee={_c}',
+              _d({**_full, 'LEX. "Coffee"': _c}) == {'PHON. *q': 'ʾ'})
+    for _h in ('tʾīl', 'ṯʾīl'):
+        check(f'AM9 rule 1 accepts heavy={_h}',
+              _d({**_full, 'LEX. "Heavy"': _h}) == {'PHON. *q': 'ʾ'})
+
+    check('AM10 rule 2  k/k -> k',   _d({_R: 'dīk / dyūk'}) == {'PHON. *k': 'k'})
+    check('AM11 rule 3  č/č -> č',   _d({_R: 'dīč / dyūč'}) == {'PHON. *k': 'č'})
+    check('AM12 rule 4  č/k -> k~č', _d({_R: 'dīč / dyūk'}) == {'PHON. *k': 'k~č'})
+    check('AM13 the hyphen separator used in documents works',
+          _d({_R: 'dīk-dyūk'}) == {'PHON. *k': 'k'})
+    check('AM14 a missing macron does not defeat the rule',
+          _d({_R: 'dīč / dyuk'}) == {'PHON. *k': 'k~č'},
+          'rules turn on k vs č, not on vowel length')
+    check('AM15 an unrecognised reflex pattern is reported, not guessed',
+          'PHON. *k' not in _d({_R: 'dīk / dyūč'}) and _u({_R: 'dīk / dyūč'}))
+    check('AM16 an unparseable value is reported',
+          _u({_R: 'nonsense'}) != [])
+
+    # ── canonicalising to the column's own options ──
+    _opts = ['dīk / dyūk', 'dīč / dyuk']
+    check('AM17 the document spelling maps onto the sheet option',
+          app.canonicalise_table_value('dīk-dyūk', _opts) == 'dīk / dyūk')
+    check('AM18 an exact option passes through',
+          app.canonicalise_table_value('dīk / dyūk', _opts) == 'dīk / dyūk')
+    check('AM19 a value matching no option returns None',
+          app.canonicalise_table_value('weird', _opts) is None)
+    check('AM20 macrons are NOT normalised away',
+          app.canonicalise_table_value('dīč / dyūk', _opts) is None,
+          'dyuk and dyūk must stay distinct')
+    check('AM21 a column with no options accepts anything',
+          app.canonicalise_table_value('x', None) == 'x')
+
+    # ── the scan ──
+    _DOCS = {
+        'd1': _tbl('biʾūl', 'dīk-dyūk', 'tʾīl', 'ʾahwi'),
+        'd2': _tbl('biʾūl', 'dīč / dyuk', 'Select', 'Select'),
+        'd3': _tbl('ygūl', 'dīk / dyūk', 'Select', 'Select'),
+        'd4': '<p>no table</p>',
+    }
+    _SHEET = {1: {}, 2: {'F': 'k~č'}, 3: {'F': 'č'}, 4: {}}
+    _corpus = [{'doc_id': k, 'name': k, 'sheet_row': i + 1}
+               for i, k in enumerate(_DOCS)]
+    with mock.patch.object(app, 'get_doc_content',
+                           side_effect=lambda d, v=0: {'display_html': _DOCS[d]}), \
+         mock.patch.object(app, 'get_sheet_features',
+                           side_effect=lambda r: _SHEET.get(r, {})):
+        _res = app.scan_auto_tags(_corpus)
+
+    _pv = {(p['doc'], p['feature']): p['value'] for p in _res['proposals']}
+    check('AM22 every document is scanned', _res['scanned'] == 4)
+    check('AM23 table values are proposed for empty cells',
+          _pv.get(('d1', 'LEX. "Heavy"')) == 'tʾīl', str(_pv))
+    check('AM24 proposals use the canonical option spelling',
+          _pv.get(('d1', 'LEX. "Rooster/Roosters"')) == 'dīk / dyūk')
+    check('AM25 derived values are proposed too',
+          _pv.get(('d1', 'PHON. *q')) == 'ʾ' and _pv.get(('d1', 'PHON. *k')) == 'k')
+    check('AM26 a value ALREADY correct in the sheet is not re-proposed',
+          ('d2', 'PHON. *k') not in _pv, str(_pv))
+    check('AM27 a DISAGREEING existing value is a conflict, not a proposal',
+          ('d3', 'PHON. *k') not in _pv
+          and any(c['doc'] == 'd3' and c['feature'] == 'PHON. *k'
+                  for c in _res['conflicts']), str(_res['conflicts']))
+    check('AM28 the conflict records both sides',
+          _res['conflicts'][0]['existing'] == 'č'
+          and _res['conflicts'][0]['value'] == 'k')
+    check('AM29 documents with no table are listed',
+          _res['no_table'] == ['d4'], str(_res['no_table']))
+    check('AM30 every proposal carries its evidence',
+          all(p['evidence'] for p in _res['proposals']))
+    check('AM31 derived proposals name the evidence they used',
+          'rule:' in _pv and True or all(
+              p['evidence'].startswith('rule:')
+              for p in _res['proposals'] if p['feature'].startswith('PHON.')))
+
+    # ── apply ──
+    _written = {}
+    def _svc2():
+        _s2 = mock.MagicMock()
+        def _bu(spreadsheetId=None, body=None, **k):
+            for d in body['data']:
+                _written[d['range']] = d['values'][0][0]
+            return mock.MagicMock(execute=lambda: {})
+        _s2.spreadsheets.return_value.values.return_value.batchUpdate = _bu
+        return (None, None, _s2)
+    with mock.patch.object(app, 'get_services', side_effect=_svc2):
+        _n = app.apply_auto_tags([
+            {'col': 'E', 'rows': [7], 'value': 'ʾ'},
+            {'col': 'F', 'rows': [7, 9], 'value': 'k'},
+        ])
+    check('AM32 apply writes one cell per row', _n == 3, str(_n))
+    check('AM33 apply targets the right cells',
+          _written == {'Recordings!E7': 'ʾ', 'Recordings!F7': 'k',
+                       'Recordings!F9': 'k'}, str(_written))
+    with mock.patch.object(app, 'get_services', side_effect=_svc2):
+        check('AM34 applying nothing writes nothing', app.apply_auto_tags([]) == 0)
+finally:
+    app.FEATURE_DEFS = _saved
+
+# ── UI wiring ──
+check('AM35 the scan is preview-only — nothing is written by scanning',
+      'batchUpdate' not in source.split('def scan_auto_tags')[1].split('\ndef ')[0])
+check('AM36 applying requires an explicit confirmation',
+      '_autotag_confirm' in source)
+check('AM37 the preview is exportable as CSV', 'pai_autotag_preview.csv' in source)
+check('AM38 conflicts and unmatched values are shown, not hidden',
+      'conflicts — left unchanged' in source and 'unrecognised values' in source)
+check('AM39 apply writes only the sheet, not 700+ documents',
+      'update_gdoc_features_section' not in
+      source.split('def apply_auto_tags')[1].split('\ndef ')[0])
+check('AM40 the write is batched rather than one call per row',
+      'for i in range(0, len(data), 500)' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

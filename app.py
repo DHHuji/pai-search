@@ -2657,6 +2657,268 @@ def get_doc_feature_exceptions(doc_id: str, version: int = 0,
     }
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+#  AUTO-TAG FROM THE TRANSCRIPTION TABLE
+# ════════════════════════════════════════════════════════════════════════════════
+# Every transcription document carries a small table near the top:
+#
+#     يقول   | ديك \\ ديوك | ثقيل | قهوة   | الآن
+#     biʾūl  | dīk-dyūk   | tʾīl | Select | Select
+#
+# "Select" is the untouched dropdown placeholder and means "not filled in".
+# This data exists in hundreds of documents but was transferred into the sheet
+# for fewer than ten, so the tables — not the sheet — are the real source.
+
+DOC_TABLE_UNSET = {'select', 'select…', '-', '—', ''}
+
+# Arabic table heading -> corpus feature name
+DOC_TABLE_FEATURE_MAP = {
+    'يقول':      'LEX. "He is saying"',
+    'ديكديوك':   'LEX. "Rooster/Roosters"',   # key is normalised (see _norm_ar)
+    'ثقيل':      'LEX. "Heavy"',
+    'قهوة':      'LEX. "Coffee"',
+    'الآن':      'LEX. "now"',
+}
+
+
+def _norm_ar(text: str) -> str:
+    """Normalise an Arabic table heading for matching: drop whitespace and the
+    slash/backslash used between singular and plural ('ديك \\ ديوك')."""
+    return re.sub(r'[\s\\/|]+', '', unicodedata.normalize('NFC', str(text or '')))
+
+
+def _split_sg_pl(value: str) -> tuple:
+    """
+    Split a 'singular <sep> plural' cell into its two halves. The separator is
+    inconsistent across the corpus — the documents write 'dīk-dyūk', the sheet
+    has 'dīk / dyūk' — so any of - / \\ ~ counts.
+    """
+    parts = [p.strip() for p in re.split(r'\s*[-/\\~]\s*',
+                                        unicodedata.normalize('NFC', str(value or '')))
+             if p.strip()]
+    return (parts[0], parts[-1]) if len(parts) >= 2 else (parts[0] if parts else '', '')
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def parse_doc_feature_table(doc_id: str, version: int = 0) -> dict:
+    """
+    {feature_name: value} read from the document's transcription table.
+    Unfilled cells ("Select") are omitted. Returns {} when there is no table.
+
+    Reads the HTML export that get_doc_content() already cached during the
+    search, so this costs no extra API call for documents already loaded.
+    """
+    try:
+        html_doc = (get_doc_content(doc_id, version) or {}).get('display_html', '')
+    except Exception:
+        return {}
+    if not html_doc:
+        return {}
+
+    for tbl in re.findall(r'<table[^>]*>.*?</table>', html_doc, re.S | re.I):
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', tbl, re.S | re.I)
+        if len(rows) < 2:
+            continue
+        def _cells(row):
+            return [html_lib.unescape(re.sub(r'<[^>]+>', '', c)).replace('\xa0', ' ').strip()
+                    for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.S | re.I)]
+        heads = _cells(rows[0])
+        vals  = _cells(rows[1])
+        mapped = {}
+        for h, v in zip(heads, vals):
+            feat = DOC_TABLE_FEATURE_MAP.get(_norm_ar(h))
+            if feat and v.strip().lower() not in DOC_TABLE_UNSET:
+                mapped[feat] = v.strip()
+        if mapped:                     # the first table that matches wins
+            return mapped
+    return {}
+
+
+def derive_phon_from_table(table_vals: dict) -> tuple:
+    """
+    Apply the reflex rules to one document's table values.
+
+    Returns (derived, unmatched) where derived is {feature_name: value} and
+    unmatched lists values the rules did not recognise, so they surface for
+    review instead of being silently ignored.
+
+        1. "He is saying"=biʾūl AND "Coffee"∈{ʾahwa,ʾahwe,ʾahwi}
+           AND "Heavy"∈{tʾīl,ṯʾīl}                       -> PHON. *q = ʾ
+        2. "Rooster/Roosters" = dīk / dyūk               -> PHON. *k = k
+        3.                      dīč / dyūč               -> PHON. *k = č
+        4.                      dīč / dyūk               -> PHON. *k = k~č
+
+    Rules 2-4 are decided on which of k / č appears in each half rather than on
+    the exact spelling, because the corpus is inconsistent about the macron
+    (both 'dyūk' and 'dyuk' occur) and about the separator. The distinction the
+    rule actually turns on is the consonant, not the vowel length.
+    """
+    derived, unmatched = {}, []
+    _n = _feat_val_norm
+
+    # ── Rule 1 — needs all three pieces of evidence ──
+    saying = _n(table_vals.get('LEX. "He is saying"'))
+    coffee = _n(table_vals.get('LEX. "Coffee"'))
+    heavy  = _n(table_vals.get('LEX. "Heavy"'))
+    if (saying == _n('biʾūl')
+            and coffee in {_n(c) for c in ('ʾahwa', 'ʾahwe', 'ʾahwi')}
+            and heavy in {_n(h) for h in ('tʾīl', 'ṯʾīl')}):
+        derived['PHON. *q'] = 'ʾ'
+
+    # ── Rules 2-4 ──
+    rooster = table_vals.get('LEX. "Rooster/Roosters"')
+    if rooster:
+        sg, pl = _split_sg_pl(rooster)
+        def _refl(part):
+            has_c, has_k = ('č' in part), ('k' in part)
+            return 'č' if has_c else ('k' if has_k else None)
+        r_sg, r_pl = _refl(sg), _refl(pl)
+        if r_sg == 'k' and r_pl == 'k':
+            derived['PHON. *k'] = 'k'
+        elif r_sg == 'č' and r_pl == 'č':
+            derived['PHON. *k'] = 'č'
+        elif r_sg == 'č' and r_pl == 'k':
+            derived['PHON. *k'] = 'k~č'
+        else:
+            unmatched.append(f'Rooster/Roosters = "{rooster}"')
+
+    return derived, unmatched
+
+
+def canonicalise_table_value(value: str, options: list) -> str | None:
+    """
+    Map a value written in a document's table onto the matching option defined
+    for that column in the sheet, so the written cell satisfies the column's
+    data validation.
+
+    The two are spelled differently: documents write 'dīk-dyūk', the sheet's
+    dropdown offers 'dīk / dyūk'. Matching ignores separators and spacing but
+    NOT letters, so 'dyuk' and 'dyūk' stay distinct — the macron is a real
+    phonological distinction and guessing across it would fabricate data.
+
+    Returns the canonical option, the value unchanged when the column has no
+    option list, or None when the column HAS options and none of them match —
+    in which case the caller should report it rather than write a value the
+    spreadsheet would flag as invalid.
+    """
+    if not options:
+        return value
+    _key = lambda v: re.sub(r'[\s\\/|~-]+', '',
+                            unicodedata.normalize('NFC', str(v or ''))).casefold()
+    want = _key(value)
+    for opt in options:
+        if _key(opt) == want:
+            return opt
+    return None
+
+
+def scan_auto_tags(corpus: list, progress=None) -> dict:
+    """
+    Read every document's transcription table and work out what could be tagged.
+
+    Writes nothing. Returns:
+      proposals — cells that are currently empty and would be filled
+      conflicts — cells that already hold a DIFFERENT value (left alone)
+      unmatched — table values the rules did not recognise
+      no_table  — documents with no readable table
+    Each proposal carries the evidence it came from, so the preview shows why.
+    """
+    by_name = {fd[2]: fd for fd in FEATURE_DEFS}
+    versions = dict(st.session_state.get('_doc_versions', {}))
+
+    rows_for: dict = {}
+    for d in corpus:
+        rows_for.setdefault(d['doc_id'], []).append(d['sheet_row'])
+
+    seen, proposals, conflicts, unmatched, no_table = set(), [], [], [], []
+    docs = [d for d in corpus if not (d['doc_id'] in seen or seen.add(d['doc_id']))]
+
+    for i, doc in enumerate(docs):
+        if progress:
+            progress(i + 1, len(docs), doc.get('name', ''))
+        try:
+            table = parse_doc_feature_table(doc['doc_id'], versions.get(doc['doc_id'], 0))
+        except Exception:
+            table = {}
+        if not table:
+            no_table.append(doc.get('name', doc['doc_id']))
+            continue
+
+        derived, bad = derive_phon_from_table(table)
+        for _b in bad:
+            unmatched.append({'doc': doc.get('name', ''), 'detail': _b})
+
+        # Table values are mapped onto the column's own dropdown options before
+        # being written; a value matching none is reported, never written.
+        _ev = ', '.join(f'{k.replace("LEX. ", "")}={v}' for k, v in table.items())
+        candidates = []
+        for f, v in table.items():
+            _fdx = by_name.get(f)
+            _canon = canonicalise_table_value(v, _fdx[4] if _fdx else None)
+            if _canon is None:
+                unmatched.append({
+                    'doc': doc.get('name', ''),
+                    'detail': f'{f} = "{v}" is not one of that column\'s options',
+                })
+                continue
+            candidates.append((f, _canon, 'from table'))
+        candidates += [(f, v, f'rule: {_ev}') for f, v in derived.items()]
+
+        try:
+            current = get_sheet_features(doc['sheet_row'])
+        except Exception:
+            current = {}
+
+        for feat, val, why in candidates:
+            fd = by_name.get(feat)
+            if not fd:
+                continue
+            existing = current.get(fd[1])
+            item = {
+                'doc':       doc.get('name', ''),
+                'doc_id':    doc['doc_id'],
+                'rows':      rows_for.get(doc['doc_id'], [doc['sheet_row']]),
+                'feature':   feat,
+                'col':       fd[1],
+                'value':     val,
+                'evidence':  why,
+                'existing':  existing,
+            }
+            if existing in (None, '', False, 0):
+                proposals.append(item)
+            elif _feat_val_norm(existing) != _feat_val_norm(val):
+                conflicts.append(item)
+            # identical value already there -> nothing to do
+
+    return {'proposals': proposals, 'conflicts': conflicts,
+            'unmatched': unmatched, 'no_table': no_table,
+            'scanned': len(docs)}
+
+
+def apply_auto_tags(proposals: list) -> int:
+    """
+    Write accepted proposals to the spreadsheet in ONE batchUpdate.
+
+    Only the sheet is written: the evidence already lives in each document's
+    own table, so rewriting 700+ Google Docs would add real risk and a long
+    runtime for no information gain. Returns the number of cells written.
+    """
+    if not proposals:
+        return 0
+    _, _, sheets_svc = get_services()
+    data = [
+        {'range': f"Recordings!{p['col']}{row}", 'values': [[p['value']]]}
+        for p in proposals for row in p['rows']
+    ]
+    for i in range(0, len(data), 500):        # keep each request a sane size
+        sheets_svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'valueInputOption': 'RAW', 'data': data[i:i + 500]},
+        ).execute()
+    st.session_state['_features_version'] = st.session_state.get('_features_version', 0) + 1
+    return len(data)
+
+
 def _csv_feature_header() -> list:
     """
     CSV column names for the feature block: every feature contributes THREE
@@ -3866,6 +4128,95 @@ if corpus and not st.session_state.get('_preload_started'):
     _preload_thread.start()
 
 with st.sidebar:
+    # ── Auto-tag from the transcription tables ────────────────────────────────
+    # Preview first, apply second: this touches up to 778 rows and there is no
+    # undo, so nothing is written until the proposals have been looked at.
+    with st.expander("🤖  Auto-tag from document tables"):
+        st.caption(
+            "Reads the table at the top of every transcription "
+            "(يقول · ديك\\ديوك · ثقيل · قهوة · الآن), copies those values into "
+            "their LEX. columns, and derives **PHON. \\*q** and **PHON. \\*k** "
+            "from them. Cells that already hold a different value are left "
+            "alone and reported."
+        )
+        if st.button("🔍  Scan documents", key="autotag_scan",
+                     disabled=not corpus):
+            _pbar = st.progress(0.0, text="Reading transcription tables…")
+            def _tick(i, n, name):
+                _pbar.progress(i / max(n, 1), text=f"{i}/{n}  ·  {name[:28]}")
+            st.session_state['_autotag'] = scan_auto_tags(corpus, progress=_tick)
+            _pbar.empty()
+
+        _at = st.session_state.get('_autotag')
+        if _at:
+            _props = _at['proposals']
+            st.markdown(
+                f"**{_at['scanned']}** documents scanned  \n"
+                f"✅ **{len(_props)}** cells to fill  \n"
+                f"⚠️ **{len(_at['conflicts'])}** conflicts (skipped)  \n"
+                f"❓ **{len(_at['unmatched'])}** unrecognised values  \n"
+                f"📄 **{len(_at['no_table'])}** documents with no table"
+            )
+
+            if _props:
+                import csv as _c2, io as _i2
+                _b = _i2.StringIO()
+                _wr = _c2.writer(_b)
+                _wr.writerow(['Document', 'Feature', 'Value', 'Evidence'])
+                for _p in _props:
+                    _wr.writerow([_p['doc'], _p['feature'], _p['value'], _p['evidence']])
+                st.download_button(
+                    "⬇ Preview as CSV", _b.getvalue().encode('utf-8-sig'),
+                    file_name="pai_autotag_preview.csv", mime="text/csv",
+                    key="autotag_dl",
+                )
+                with st.expander(f"👁 First 25 of {len(_props)}"):
+                    for _p in _props[:25]:
+                        st.caption(
+                            f"**{_p['doc']}** · `{_p['feature']}` = "
+                            f"**{_p['value']}**  \n<small>{_p['evidence']}</small>",
+                            unsafe_allow_html=True,
+                        )
+
+                if st.session_state.get('_autotag_confirm'):
+                    st.warning(
+                        f"Write **{len(_props)}** values to the spreadsheet? "
+                        "This cannot be undone."
+                    )
+                    _ac1, _ac2 = st.columns(2)
+                    with _ac1:
+                        if st.button("✅ Yes, apply", key="autotag_yes", type="primary"):
+                            try:
+                                _n = apply_auto_tags(_props)
+                                st.session_state.pop('_autotag', None)
+                                st.session_state.pop('_autotag_confirm', None)
+                                st.success(f"✅ Wrote {_n} cells")
+                                st.rerun()
+                            except Exception as _ae:
+                                st.error(f"Apply failed: {_ae}")
+                    with _ac2:
+                        if st.button("❌ Cancel", key="autotag_no"):
+                            st.session_state.pop('_autotag_confirm', None)
+                            st.rerun()
+                else:
+                    if st.button(f"✍️  Apply {len(_props)} tags",
+                                 key="autotag_apply", type="primary"):
+                        st.session_state['_autotag_confirm'] = True
+                        st.rerun()
+
+            if _at['conflicts']:
+                with st.expander(f"⚠️ {len(_at['conflicts'])} conflicts — left unchanged"):
+                    for _cf in _at['conflicts'][:40]:
+                        st.caption(
+                            f"**{_cf['doc']}** · `{_cf['feature']}`: "
+                            f"sheet has `{_cf['existing']}`, table implies "
+                            f"`{_cf['value']}`"
+                        )
+            if _at['unmatched']:
+                with st.expander(f"❓ {len(_at['unmatched'])} unrecognised values"):
+                    for _um in _at['unmatched'][:40]:
+                        st.caption(f"**{_um['doc']}** · {_um['detail']}")
+
     st.markdown("### 📚 Corpus")
     if corpus:
         st.markdown(f"**{len(corpus)}** documents loaded")
