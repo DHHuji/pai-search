@@ -147,10 +147,10 @@ get_column_indices()          ttl=3600s  — COL_NAMES → column index
 get_extra_feature_defs()      ttl=600s   — AppFeatureDefs tab
 _infer_column_types()         ttl=300s   — Data Validation lookup + value inference
                               key: tuple of (col_letter, header_text)
-get_unresolved_features()     ttl=600s
-get_unclaimed_headers()       ttl=600s
 load_corpus_index()           ttl=600s   — list of all recordings with metadata
 get_doc_content()             ttl=3600s, persist="disk"  — Google Doc HTML
+get_doc_feature_examples()    ttl=3600s  — מילות הדוגמה מבלוק FEATURES שבמסמך
+                              key: (doc_id, version, _col_set)
 _get_all_sheet_features()     ttl=3600s  — {sheet_row: {col_letter: value}}
                               key: (version, _col_set)  — מתבטל אם column set השתנה
 ```
