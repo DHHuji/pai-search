@@ -1739,10 +1739,12 @@ def _status_badge(status: str) -> str:
 # Display names are kept stable across header renames so existing "FEATURES:"
 # lines already written into Google Docs (matched by display-name, not header
 # text) don't get orphaned.
-# To add a NEW feature column that someone added directly in the spreadsheet,
-# use the "➕ Add a feature column" control in the sidebar (it persists to the
-# 'AppFeatureDefs' tab — see get_extra_feature_defs()) rather than editing
-# this hardcoded list, unless you're a developer doing a permanent addition.
+# To add a NEW feature column, just give it a PHON. / MOR. / SYN. / LEX.
+# header in the spreadsheet — it is discovered automatically and its type and
+# options are read from the column's data validation. Add an entry here only
+# to pin a type/options combination in code. (The 'AppFeatureDefs' tab is still
+# read by get_extra_feature_defs() for historical entries, but the sidebar UI
+# that used to write to it was removed once prefix discovery made it redundant.)
 # The four recognised category prefixes.  Any spreadsheet column whose
 # header starts with one of these is automatically treated as a feature
 # column (see get_feature_defs()).  FEATURE_HEADER_DEFS below is now used
@@ -2097,35 +2099,10 @@ APP_FEATURES_SHEET_NAME = "AppFeatureDefs"
 _APP_FEATURES_HEADER = ['header_text', 'display_name', 'type', 'options']
 
 
-def _ensure_app_features_sheet() -> None:
-    """
-    Make sure a dedicated 'AppFeatureDefs' tab exists in the spreadsheet, for
-    feature columns users register from the sidebar "➕ Add a feature column"
-    control (see add_app_feature_def()). Creates it with a header row if it
-    doesn't exist yet. Safe to call repeatedly — a no-op once the tab exists.
-    """
-    _, _, sheets_svc = get_services()
-    meta = sheets_svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-    titles = {s['properties']['title'] for s in meta.get('sheets', [])}
-    if APP_FEATURES_SHEET_NAME in titles:
-        return
-    sheets_svc.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={'requests': [{'addSheet': {'properties': {'title': APP_FEATURES_SHEET_NAME}}}]},
-    ).execute()
-    sheets_svc.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{APP_FEATURES_SHEET_NAME}!A1",
-        valueInputOption='RAW',
-        body={'values': [_APP_FEATURES_HEADER]},
-    ).execute()
-
-
 @st.cache_data(ttl=600, show_spinner=False)
 def get_extra_feature_defs() -> list[tuple]:
     """
-    Read user-added feature definitions from the 'AppFeatureDefs' tab (rows
-    written by add_app_feature_def(), via the sidebar control). Each row is
+    Read user-added feature definitions from the 'AppFeatureDefs' tab. Each row is
     (header_text, display_name, type, options) — options is None for 'bool'
     features or a list parsed from a '; '-separated string for 'select'
     features. Returns [] if the tab doesn't exist yet or has no data rows.
@@ -2150,65 +2127,6 @@ def get_extra_feature_defs() -> list[tuple]:
         options = [o.strip() for o in options_raw.split(';') if o.strip()] if ftype == 'select' else None
         out.append((header_text, display_name or header_text, ftype, options))
     return out
-
-
-def add_app_feature_def(header_text: str, display_name: str, ftype: str, options: list[str] | None) -> None:
-    """
-    Register a new feature column — typically one a user manually added to
-    the live Recordings sheet — by appending a row to the 'AppFeatureDefs'
-    tab (creating that tab first if needed). After calling this, clear
-    get_extra_feature_defs and get_feature_defs (and rerun) so the new
-    feature is picked up immediately.
-    """
-    _ensure_app_features_sheet()
-    _, _, sheets_svc = get_services()
-    options_str = '; '.join(options) if options else ''
-    sheets_svc.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{APP_FEATURES_SHEET_NAME}!A1",
-        valueInputOption='RAW',
-        insertDataOption='INSERT_ROWS',
-        body={'values': [[header_text.strip(), display_name.strip(), ftype.strip(), options_str]]},
-    ).execute()
-
-
-def remove_app_feature_def(header_text: str) -> bool:
-    """
-    Remove a previously user-added feature (by header_text) from the
-    'AppFeatureDefs' tab. Used by the sidebar's delete control for undoing a
-    mistaken addition. Returns True if a row was removed, False if the tab
-    doesn't exist or no matching row was found.
-    """
-    _, _, sheets_svc = get_services()
-    try:
-        result = sheets_svc.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{APP_FEATURES_SHEET_NAME}!A1:D",
-        ).execute()
-    except Exception:
-        return False
-    rows = result.get('values') or []
-    target = header_text.strip()
-    keep = [rows[0]] if rows else [_APP_FEATURES_HEADER]
-    removed = False
-    for row in rows[1:]:
-        if row and row[0].strip() == target and not removed:
-            removed = True
-            continue
-        keep.append(row)
-    if not removed:
-        return False
-    sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{APP_FEATURES_SHEET_NAME}!A1:D",
-    ).execute()
-    sheets_svc.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{APP_FEATURES_SHEET_NAME}!A1",
-        valueInputOption='RAW',
-        body={'values': keep},
-    ).execute()
-    return True
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -2374,49 +2292,6 @@ def get_feature_defs() -> list[tuple]:
     return resolved
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def get_unresolved_features() -> list[str]:
-    """
-    Header texts of user-registered features (from the AppFeatureDefs tab)
-    that can no longer be found in the live Recordings sheet.
-
-    Prefix-based columns (PHON. / MOR. / SYN. / LEX.) are auto-discovered
-    by get_feature_defs() and don't need tracking here — if the column
-    exists it will be found; if it was removed it simply won't appear, and
-    no warning is needed.  FEATURE_HEADER_DEFS is now a lookup-only table
-    (not an expected-column list), so its entries are also excluded.
-    Only manually-registered extras (AppFeatureDefs tab) are checked.
-    """
-    headers = _get_sheet_headers()
-    header_set = {h.strip() for h in headers}
-    return [display_name for header_text, display_name, *_ in get_extra_feature_defs()
-            if header_text.strip() not in header_set]
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def get_unclaimed_headers() -> list[str]:
-    """
-    Live Recordings header texts that aren't already automatically covered
-    or claimed, offered in the sidebar's "➕ Add a feature column" picker.
-
-    Excluded from results (i.e. considered already 'claimed'):
-    • Headers starting with a FEAT_PREFIX — auto-discovered by get_feature_defs()
-    • Headers in FEATURE_HEADER_DEFS (legacy lookup table)
-    • Headers registered via the AppFeatureDefs tab
-    • Known non-feature metadata columns (COL_NAMES)
-    """
-    headers = _get_sheet_headers()
-    claimed = {h.strip() for h, *_ in FEATURE_HEADER_DEFS}
-    claimed |= {h.strip() for h, *_ in get_extra_feature_defs()}
-    claimed |= {v.strip() for v in COL_NAMES.values()}
-    return [
-        h for h in headers
-        if h.strip()
-        and h.strip() not in claimed
-        and not any(h.strip().startswith(p) for p in FEAT_PREFIXES)
-    ]
-
-
 # Resolve the live feature list now (and again each cache window on every
 # rerun) — this is THE list every consumer in this file reads from.
 # Wrapped defensively: this now makes a live Sheets API call unconditionally
@@ -2505,104 +2380,6 @@ def load_corpus_index() -> list[dict]:
         })
 
     return corpus
-
-
-def debug_corpus_load(tail: int = 20) -> dict:
-    """
-    Non-cached version of corpus loading for debugging.
-    Returns:
-      - 'corpus': list of loaded docs (same as load_corpus_index)
-      - 'skipped': list of rows that had a trans_name but were skipped (no valid link/doc_id)
-      - 'total_rows': total sheet rows read (excl. header)
-      - 'tail_raw': raw cell info for the last `tail` rows that had ANY content
-    """
-    _, _, sheets_svc = get_services()
-    # Discover column positions dynamically (same logic as load_corpus_index)
-    _hdr_result = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID, range='Recordings!1:1',
-    ).execute()
-    _headers    = (_hdr_result.get('values') or [[]])[0]
-    _hdr_map    = {h: i for i, h in enumerate(_headers)}
-    _col_trans  = _hdr_map.get(COL_NAMES['trans_link'])
-    _col_rec    = _hdr_map.get(COL_NAMES['rec_link'])
-
-    result = sheets_svc.spreadsheets().get(
-        spreadsheetId=SPREADSHEET_ID,
-        ranges=['Recordings'],
-        includeGridData=True,
-    ).execute()
-
-    grid = result['sheets'][0]['data'][0]['rowData']
-    corpus   = []
-    skipped  = []
-    tail_raw = []
-
-    for grid_row_idx, row in enumerate(grid[1:], start=2):
-        cells = row.get('values', [])
-        if not cells:
-            continue
-
-        def _cv(idx, _c=cells):
-            if idx is None or idx >= len(_c): return None
-            return _c[idx].get('formattedValue')
-
-        def _cl(idx, _c=cells):
-            if idx is None or idx >= len(_c): return None
-            cell = _c[idx]
-            if cell.get('hyperlink'):
-                return ('hyperlink', cell['hyperlink'])
-            val = (
-                (cell.get('userEnteredValue') or {}).get('stringValue')
-                or cell.get('formattedValue') or ''
-            )
-            if 'docs.google.com' in val or val.startswith('https://'):
-                return ('plaintext', val.strip())
-            return ('none', None)
-
-        trans_name = _cv(_col_trans)
-        link_src, trans_url = _cl(_col_trans)
-        rec_name   = _cv(_col_rec) or ''
-        row_info   = {
-            'sheet_row':  grid_row_idx,
-            'trans_name': trans_name,
-            'rec_name':   rec_name,
-            'link_src':   link_src,
-            'trans_url':  trans_url,
-        }
-
-        # Collect tail raw for last N content rows
-        if trans_name or rec_name:
-            tail_raw.append(row_info)
-            if len(tail_raw) > tail:
-                tail_raw.pop(0)
-
-        if not trans_url or not any(d in trans_url for d in (
-            'docs.google.com/document', 'drive.google.com', 'docs.google.com/file'
-        )):
-            if trans_name:
-                row_info['skip_reason'] = 'no valid link'
-                skipped.append(row_info)
-            continue
-
-        doc_id = _extract_doc_id(trans_url)
-        if not doc_id:
-            row_info['skip_reason'] = 'doc_id extraction failed'
-            skipped.append(row_info)
-            continue
-
-        corpus.append({
-            'name':      trans_name or rec_name or doc_id,
-            'rec_name':  rec_name,
-            'doc_id':    doc_id,
-            'sheet_row': grid_row_idx,
-        })
-
-    return {
-        'corpus':     corpus,
-        'skipped':    skipped,
-        'total_rows': len(grid) - 1,
-        'tail_raw':   tail_raw,
-    }
 
 
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
@@ -3772,150 +3549,13 @@ with st.sidebar:
         st.rerun()
 
     # Moved here (2026-06-22) from the main search page, where it sat right
-    # under the advanced filters and was getting clicked by mistake — see
-    # the note above add_app_feature_def(). This one does a full
-    # st.cache_data.clear() (every cached function, not just the
+    # under the advanced filters and was getting clicked by mistake. This one
+    # does a full st.cache_data.clear() (every cached function, not just the
     # corpus/column-index ones the button above targets).
     if st.button("↺ Clear cache & reload", key="sidebar_clear_cache",
                  help="Force a full reload of everything from Google Sheets/Docs"):
         st.cache_data.clear()
         st.rerun()
-
-    st.markdown("### 🧬 Feature columns")
-    _unresolved = get_unresolved_features()
-    if _unresolved:
-        st.warning(
-            "These features' columns weren't found in the live sheet right "
-            "now (renamed or removed?): " + ", ".join(_unresolved)
-        )
-    with st.expander("➕ Add a feature column"):
-        st.caption(
-            "Columns whose header starts with PHON. / MOR. / SYN. / LEX. "
-            "are discovered automatically — no registration needed. "
-            "Use this only for other columns (non-prefix) or to override "
-            "the type/options of an existing prefix column."
-        )
-        _unclaimed = get_unclaimed_headers()
-        _CUSTOM_OPT = "✏️ Type a custom header name…"
-        _header_choice = st.selectbox(
-            "Spreadsheet column header",
-            options=(_unclaimed + [_CUSTOM_OPT]) if _unclaimed else [_CUSTOM_OPT],
-            key="addfeat_header_choice",
-            help="Columns in the live sheet not yet tracked as a feature "
-                 "(or known metadata column) appear here automatically.",
-        )
-        if _header_choice == _CUSTOM_OPT:
-            _header_text = st.text_input(
-                "Exact header text (must match the spreadsheet cell exactly)",
-                key="addfeat_header_custom",
-            )
-        else:
-            _header_text = _header_choice
-
-        _display_name = st.text_input(
-            "Display name in the app",
-            value=_header_text if _header_text else "",
-            key="addfeat_display_name",
-        )
-        _ftype_label = st.radio(
-            "Feature type",
-            options=["Yes / No (checkbox)", "Multiple choice (pick one value)"],
-            key="addfeat_type",
-            horizontal=False,
-        )
-        _ftype = 'bool' if _ftype_label.startswith("Yes") else 'select'
-        _options: list[str] = []
-        if _ftype == 'select':
-            _options_raw = st.text_area(
-                "Allowed values (one per line, or comma-separated)",
-                key="addfeat_options",
-            )
-            _options = [o.strip() for o in re.split(r'[,\n]', _options_raw) if o.strip()]
-
-        if st.button("Add feature", key="addfeat_submit"):
-            if not _header_text or not _header_text.strip():
-                st.error("Enter or pick the spreadsheet column header text.")
-            elif _ftype == 'select' and not _options:
-                st.error("Add at least one allowed value for a multiple-choice feature.")
-            else:
-                try:
-                    add_app_feature_def(
-                        header_text=_header_text,
-                        display_name=_display_name.strip() or _header_text.strip(),
-                        ftype=_ftype,
-                        options=_options or None,
-                    )
-                    get_extra_feature_defs.clear()
-                    get_feature_defs.clear()
-                    get_unresolved_features.clear()
-                    get_unclaimed_headers.clear()
-                    st.success(f"Added “{_display_name or _header_text}”. Reloading…")
-                    st.rerun()
-                except Exception as _e:
-                    st.error(f"Couldn't add feature: {_e}")
-
-        _extra_defs = get_extra_feature_defs()
-        if _extra_defs:
-            st.markdown("**User-added features:**")
-            for _hdr, _disp, _ft, _opts in _extra_defs:
-                _col_a, _col_b = st.columns([5, 1])
-                with _col_a:
-                    st.caption(f"{_disp}  ·  _{_hdr}_  ·  {_ft}")
-                with _col_b:
-                    if st.button("🗑️", key=f"addfeat_del_{_hdr}", help="Remove this feature"):
-                        if remove_app_feature_def(_hdr):
-                            get_extra_feature_defs.clear()
-                            get_feature_defs.clear()
-                            get_unresolved_features.clear()
-                            get_unclaimed_headers.clear()
-                            st.rerun()
-
-    with st.expander("🔧 Debug: inspect corpus row"):
-        _dbg_q = st.text_input("Row name or doc ID to inspect", key="dbg_row_q",
-                                placeholder="e.g. BĠr.1F.R27")
-        if st.button("Run debug scan", key="dbg_run"):
-            with st.spinner("Reading raw sheet data…"):
-                _dbg = debug_corpus_load(tail=30)
-            st.markdown(f"**Sheet rows read:** {_dbg['total_rows']}")
-            st.markdown(f"**Corpus entries loaded:** {len(_dbg['corpus'])}")
-            st.markdown(f"**Skipped rows (had name, no valid link):** {len(_dbg['skipped'])}")
-
-            _q = _dbg_q.strip().lower()
-            if _q:
-                # Search loaded corpus
-                _hits = [d for d in _dbg['corpus']
-                         if _q in d.get('name','').lower()
-                         or _q in d.get('rec_name','').lower()
-                         or _q in d.get('doc_id','').lower()]
-                st.markdown(f"**Corpus matches for '{_dbg_q}':** {len(_hits)}")
-                for _h in _hits:
-                    st.code(json.dumps(_h, ensure_ascii=False, indent=2))
-
-                # Search skipped rows
-                _skip_hits = [d for d in _dbg['skipped']
-                              if _q in str(d.get('trans_name','')).lower()
-                              or _q in str(d.get('rec_name','')).lower()]
-                st.markdown(f"**Skipped matches:** {len(_skip_hits)}")
-                for _h in _skip_hits:
-                    st.code(json.dumps(_h, ensure_ascii=False, indent=2))
-
-                # Search tail raw rows
-                _tail_hits = [d for d in _dbg['tail_raw']
-                              if _q in str(d.get('trans_name','')).lower()
-                              or _q in str(d.get('rec_name','')).lower()]
-                st.markdown(f"**Tail raw rows matching:** {len(_tail_hits)}")
-                for _h in _tail_hits:
-                    st.code(json.dumps(_h, ensure_ascii=False, indent=2))
-
-            else:
-                st.markdown("**Last 10 raw rows with content:**")
-                for _row in _dbg['tail_raw'][-10:]:
-                    st.code(json.dumps(_row, ensure_ascii=False))
-                if _dbg['skipped']:
-                    st.markdown("**Skipped rows:**")
-                    for _row in _dbg['skipped'][-5:]:
-                        st.code(json.dumps(_row, ensure_ascii=False))
-
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  UI
@@ -4321,8 +3961,7 @@ with mid:
 
     # NOTE: the "Clear cache & reload" button used to live here. Users kept
     # clicking it by mistake while working with the filters above it, so
-    # it's been moved into the sidebar (the "<<" panel) — see the
-    # "↺ Clear cache & reload" button under "### 🧬 Feature columns" there.
+    # it's been moved into the sidebar (the "<<" panel).
 
 
 # ── Bridge component: listens for right-click tags from document iframes ──────
