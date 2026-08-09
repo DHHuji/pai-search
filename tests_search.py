@@ -8,7 +8,7 @@ Covers the territory tests_full.py and tests_deep.py do not:
 
 Run: python tests_search.py
 """
-import sys, re, unicodedata
+import sys, re, json, unicodedata
 import unittest.mock as mock
 
 sys.path.insert(0, '/sessions/laughing-eager-ramanujan')
@@ -767,6 +767,108 @@ check('AF12 "not tagged" is still selectable alongside real values',
       '[FEAT_NONE_OPTION] + (_fd[4] or [])' in source)
 check('AF13 FEAT_NONE_OPTION is handled inside the any() test',
       '_is_empty if _w == FEAT_NONE_OPTION' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AG. Free-text feature search in the tagging popup')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('AG1 the popup has a feature search input',   'id="ctx-feat-q"' in source)
+check('AG2 the search input has a clear button',    'id="ctx-feat-clear"' in source)
+check('AG3 search CSS is defined',                  '#ctx-feat-search {' in source)
+check('AG4 matching strips the category prefix',    'function stripPrefix(name)' in source)
+check('AG5 matching tries full name AND bare name',
+      'full.indexOf(q) >= 0 || bare.indexOf(q) >= 0' in source)
+check('AG6 option values are searchable too',       'opts.indexOf(q) >= 0' in source)
+check('AG7 search results are rendered flat',       'function renderSearch(q)' in source)
+check('AG8 group browsing still exists',            'function renderGroups()' in source)
+check('AG9 feature rows are built by one shared helper',
+      'function makeFeatureItem(' in source)
+check('AG10 flat results show which group a feature belongs to',
+      'ctx-grp-tag' in source and 'function groupOf(' in source)
+check('AG11 a no-match state is shown',             'No feature matches' in source)
+check('AG12 the query resets on every right-click',
+      "featQ.value = '';\n    applyFeatureQuery();" in source)
+check('AG13 the selected-word header survives clearing the query',
+      'baseHeader' in source)
+check('AG14 typing in the box cannot close the menu',
+      "featQ.addEventListener('keydown'" in source
+      and "featQ.addEventListener('mousedown'" in source)
+check('AG15 Escape clears the query',
+      "if (e.key === 'Escape') {{ featQ.value = ''" in source
+      or "e.key === 'Escape'" in source)
+check('AG16 features with no known prefix stay reachable in the popup',
+      'UNGROUPED' in source)
+
+# The rendered JS must be structurally valid — an unbalanced brace here fails
+# silently in the browser and takes the whole context menu down with it.
+_saved_defs = app.FEATURE_DEFS
+app.FEATURE_DEFS = [
+    (1, 'A', 'PHON. Diphthongs',     'bool',   None),
+    (2, 'B', 'MOR. Fem. Ending',     'select', ['-i', '-e', '-a']),
+    (3, 'C', 'LEX. "want"',          'select', ['badd', 'bidd']),
+    (4, 'D', 'SYN. Continuous Mod.', 'select', ['Q-ʿ-D', 'B-Q-Y']),
+]
+try:
+    _html = app.inject_interaction_js('<p>x</p>', 'doc1')
+    check('AG17 rendered popup contains the search box', 'ctx-feat-q' in _html)
+    check('AG18 no unrendered f-string braces leak into the page',
+          '{{' not in _html and '}}' not in _html)
+    _js = re.search(r'<script>\n\(function\(\)\{(.*?)\n\}\)\(\);', _html, re.S)
+    check('AG19 the popup script block is extractable', _js is not None)
+    if _js:
+        _b = _js.group(1)
+        check('AG20 rendered JS braces balance',
+              _b.count('{') == _b.count('}'), f"{_b.count('{')}/{_b.count('}')}")
+        check('AG21 rendered JS parens balance',
+              _b.count('(') == _b.count(')'), f"{_b.count('(')}/{_b.count(')')}")
+        check('AG22 rendered JS brackets balance',
+              _b.count('[') == _b.count(']'), f"{_b.count('[')}/{_b.count(']')}")
+    _feats = json.loads(re.search(r'const FEATURES\s*=\s*(\[.*?\]);', _html, re.S).group(1))
+    check('AG23 every feature is exposed to the popup', len(_feats) == 4, str(len(_feats)))
+    check('AG24 each feature carries name/type/opts',
+          all({'name', 'type', 'opts'} <= set(f) for f in _feats))
+finally:
+    app.FEATURE_DEFS = _saved_defs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AH. Feature Browse grouped by category')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('AH1 the four category groups are declared',  '_FEAT_GROUP_LABELS' in source)
+check('AH2 one multiselect per group, not one flat list',
+      'key=f"feat_browse_grp_{_gprefix.rstrip(\'.\')}"' in source)
+check('AH3 the old flat picker is gone',
+      'key="feat_browse_names"' not in source)
+check('AH4 labels drop the prefix (the heading already carries it)',
+      'format_func=_bare_feat' in source and 'def _bare_feat(' in source)
+check('AH5 each group heading shows how many features it has',
+      '({len(_g_feats)})' in source)
+check('AH6 groups are laid out in two columns',
+      '_g1 if _gi % 2 == 0 else _g2' in source)
+check('AH7 selections from every group are combined',
+      '_sel_feats.extend(' in source)
+check('AH8 an empty group is skipped, not shown empty',
+      'if not _g_feats:' in source)
+check('AH9 prefix-less features remain reachable via an Other group',
+      '_ungrouped' in source and 'feat_browse_grp_other' in source)
+check('AH10 the popup and this screen use the same four categories',
+      all(p in source for p in ('PHON.', 'MOR.', 'SYN.', 'LEX.')))
+
+# The group prefixes offered here must be exactly FEAT_PREFIXES — otherwise a
+# whole category of features would silently vanish from this screen.
+_grp_block = re.search(r'_FEAT_GROUP_LABELS\s*=\s*\[(.*?)\]', source, re.S).group(1)
+_grp_prefixes = tuple(re.findall(r"\('([A-Z]+\.)'", _grp_block))
+check('AH11 group prefixes match FEAT_PREFIXES exactly',
+      _grp_prefixes == app.FEAT_PREFIXES,
+      f'{_grp_prefixes} vs {app.FEAT_PREFIXES}')
+
+# _bare_feat must strip exactly like the popup's stripPrefix()
+check('AH12 prefix stripping agrees with the popup implementation',
+      all(
+          f'{p} x'.startswith(p) and f'{p} x'[len(p):].strip() == 'x'
+          for p in app.FEAT_PREFIXES
+      ))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

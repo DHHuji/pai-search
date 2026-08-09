@@ -901,6 +901,31 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
 }}
 .ctx-kc:hover {{ background:#3a3a3c; }}
 .ctx-kc.ctx-anchor {{ background:#1a3a5c; border-color:#60aee8; color:#90caf9; font-weight:700; }}
+/* ── Free-text feature search ── */
+#ctx-feat-search {{
+  display:flex; gap:6px; align-items:center;
+  padding:7px 12px; border-bottom:1px solid #333;
+  background:#1c1c1e; flex-shrink:0;
+}}
+#ctx-feat-q {{
+  flex:1; min-width:0; background:#2c2c2e; border:1px solid #444;
+  border-radius:7px; color:#f2f2f7; font-size:12.5px;
+  padding:5px 9px; outline:none; font-family:inherit;
+}}
+#ctx-feat-q:focus {{ border-color:#60aee8; }}
+#ctx-feat-q::placeholder {{ color:#777; }}
+#ctx-feat-clear {{
+  background:none; border:none; color:#777; cursor:pointer;
+  font-size:13px; padding:2px 4px; flex-shrink:0; display:none;
+}}
+#ctx-feat-clear:hover {{ color:#f2f2f7; }}
+/* group tag shown next to a feature in flat search results */
+.ctx-grp-tag {{
+  font-size:9.5px; color:#60aee8; background:#123; border:1px solid #245;
+  border-radius:4px; padding:1px 5px; flex-shrink:0; margin-right:7px;
+  letter-spacing:.03em;
+}}
+.ctx-empty {{ padding:10px 16px; color:#777; font-size:12px; font-style:italic; }}
 </style>
 <div id="pai-ctx-menu">
   <div id="pai-ctx-header">TAG FEATURE</div>
@@ -914,6 +939,13 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     <div id="ctx-edit-note">Replaces only this occurrence</div>
     <button id="ctx-kb-toggle">⌨ PAI chars</button>
     <div id="ctx-kb-panel"></div>
+  </div>
+  <!-- Free-text feature search: finds a feature across ALL four groups,
+       matching either its full name ("LEX. want") or its bare name ("want"). -->
+  <div id="ctx-feat-search">
+    <input id="ctx-feat-q" type="text" placeholder="🔎 search features…"
+           autocomplete="off" spellcheck="false"/>
+    <button id="ctx-feat-clear" title="Clear">✕</button>
   </div>
   <div id="pai-ctx-scroll"></div>
 </div>
@@ -1018,14 +1050,42 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     e.stopPropagation();
   }});
 
-  // ── Build grouped feature menu (3 levels: group → feature → value) ────
+  // ── Feature menu ──────────────────────────────────────────────────────
+  // Two ways in:
+  //   1. Browse by group  (PHON. → feature → value)   — default
+  //   2. Free-text search (matches ANY feature across all four groups,
+  //      by full name "LEX. want" OR bare name "want")
   const GROUP_ORDER = ['PHON.', 'MOR.', 'SYN.', 'LEX.'];
   const FEAT_GROUPS = {{}};
   GROUP_ORDER.forEach(function(p) {{ FEAT_GROUPS[p] = []; }});
+  const UNGROUPED = [];
   FEATURES.forEach(function(fd) {{
     const grp = GROUP_ORDER.find(function(p) {{ return fd.name.startsWith(p); }});
-    if (grp) FEAT_GROUPS[grp].push(fd);
+    if (grp) FEAT_GROUPS[grp].push(fd); else UNGROUPED.push(fd);
   }});
+
+  function stripPrefix(name) {{
+    for (var i = 0; i < GROUP_ORDER.length; i++) {{
+      if (name.indexOf(GROUP_ORDER[i]) === 0) {{
+        return name.slice(GROUP_ORDER[i].length).trim();
+      }}
+    }}
+    return name;
+  }}
+  function groupOf(name) {{
+    const g = GROUP_ORDER.find(function(p) {{ return name.indexOf(p) === 0; }});
+    return g ? g.replace('.', '') : '';
+  }}
+  // Match on the full name AND on the name with its prefix removed, so
+  // typing "want" finds 'LEX. "want"' without knowing the category.
+  function featMatches(fd, q) {{
+    if (!q) return true;
+    const full = fd.name.toLowerCase();
+    const bare = stripPrefix(fd.name).toLowerCase();
+    // also match the option values, so searching "bidd" finds its feature
+    const opts = (fd.opts || []).join(' ').toLowerCase();
+    return full.indexOf(q) >= 0 || bare.indexOf(q) >= 0 || opts.indexOf(q) >= 0;
+  }}
 
   function hideSub2() {{
     subMenu2.style.display = 'none';
@@ -1039,97 +1099,168 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     activeItem = null;
   }}
 
-  GROUP_ORDER.forEach(function(grp) {{
-    const fds = FEAT_GROUPS[grp];
-    if (!fds || !fds.length) return;
-    const item = document.createElement('div');
-    item.className = 'ctx-item';
-    item.innerHTML = '<span class="ctx-icon">⊛</span>'
-      + '<span class="ctx-label">' + grp + '</span>'
-      + '<span class="ctx-badge">' + fds.length + ' ▸</span>';
-    item.addEventListener('mouseenter', function() {{
-      hideSub2();
-      activeItem = item;
-      subMenu.innerHTML = '';
-      fds.forEach(function(fd) {{
-        const si = document.createElement('div');
-        si.className = 'ctx-sub-item';
-        if (fd.type === 'bool') {{
-          si.textContent = fd.name;
-          si.addEventListener('click', function(e) {{
-            e.stopPropagation();
-            storeTag(fd.name, true);
-          }});
-          si.addEventListener('mouseenter', function() {{ hideSub2(); }});
-        }} else {{
-          // Select feature — hover opens a third-level value submenu.
-          // Select features are MULTI-VALUE: picking a second value adds to
-          // the first rather than replacing it, so already-tagged values are
-          // marked with a ✓ and the feature row shows how many are set.
-          const cur   = CURRENT[fd.name] || [];
-          const badge = cur.length
-            ? '<span style="font-size:10px;color:#7ee8a2;flex-shrink:0;padding-left:6px">✓' +
-              (cur.length > 1 ? cur.length : '') + '</span>'
-            : '';
-          si.innerHTML = '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">'
-            + fd.name + '</span>'
-            + badge
-            + '<span style="opacity:.5;flex-shrink:0;padding-left:6px">▸</span>';
-          si.style.display = 'flex';
-          if (cur.length) si.title = 'Already tagged: ' + cur.join(', ');
-          si.addEventListener('mouseenter', function() {{
-            activeSub2Item = si;
-            subMenu2.innerHTML = '';
-            fd.opts.forEach(function(opt) {{
-              const si2 = document.createElement('div');
-              si2.className = 'ctx-sub-item';
-              const isSet = cur.some(function(c) {{
-                return String(c).trim().toLowerCase() === String(opt).trim().toLowerCase();
-              }});
-              si2.style.display = 'flex';
-              si2.innerHTML =
-                '<span style="flex:1">' + opt + '</span>' +
-                (isSet ? '<span style="color:#7ee8a2;padding-left:10px">✓</span>' : '');
-              si2.title = isSet
-                ? 'Already tagged on this document'
-                : (cur.length ? 'Will be added alongside: ' + cur.join(', ') : '');
-              si2.addEventListener('click', function(e) {{
-                e.stopPropagation();
-                storeTag(fd.name, opt);
-              }});
-              subMenu2.appendChild(si2);
-            }});
-            // Position sub-sub menu to the right of (or left of) the sub menu
-            const sr  = subMenu.getBoundingClientRect();
-            const ir2 = si.getBoundingClientRect();
-            const vw  = window.innerWidth, vh = window.innerHeight;
-            subMenu2.style.display = 'block';
-            const sr2 = subMenu2.getBoundingClientRect();
-            let sx = sr.right + 4;
-            if (sx + sr2.width > vw) sx = sr.left - sr2.width - 4;
-            let sy = ir2.top;
-            if (sy + sr2.height > vh) sy = vh - sr2.height - 8;
-            subMenu2.style.left = sx + 'px';
-            subMenu2.style.top  = sy + 'px';
-          }});
-        }}
-        subMenu.appendChild(si);
+  // Position `target` beside `relEl`, vertically aligned with `anchorItem`.
+  function positionSub(target, relEl, anchorItem) {{
+    const rr = relEl.getBoundingClientRect();
+    const ir = anchorItem.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    target.style.display = 'block';
+    const tr = target.getBoundingClientRect();
+    let sx = rr.right + 4;
+    if (sx + tr.width > vw) sx = rr.left - tr.width - 4;
+    let sy = ir.top;
+    if (sy + tr.height > vh) sy = vh - tr.height - 8;
+    target.style.left = sx + 'px';
+    target.style.top  = sy + 'px';
+  }}
+
+  // Fill `target` with the value list for a select feature.
+  function buildValueMenu(fd, anchorItem, target, relEl) {{
+    const cur = CURRENT[fd.name] || [];
+    target.innerHTML = '';
+    (fd.opts || []).forEach(function(opt) {{
+      const si2 = document.createElement('div');
+      si2.className = 'ctx-sub-item';
+      const isSet = cur.some(function(c) {{
+        return String(c).trim().toLowerCase() === String(opt).trim().toLowerCase();
       }});
-      // Position the first-level submenu to the right of (or left of) the main menu
-      const mr = menu.getBoundingClientRect();
-      const ir = item.getBoundingClientRect();
-      const vw = window.innerWidth, vh = window.innerHeight;
-      subMenu.style.display = 'block';
-      const sr = subMenu.getBoundingClientRect();
-      let sx = mr.right + 4;
-      if (sx + sr.width > vw) sx = mr.left - sr.width - 4;
-      let sy = ir.top;
-      if (sy + sr.height > vh) sy = vh - sr.height - 8;
-      subMenu.style.left = sx + 'px';
-      subMenu.style.top  = sy + 'px';
+      si2.style.display = 'flex';
+      si2.innerHTML =
+        '<span style="flex:1">' + opt + '</span>' +
+        (isSet ? '<span style="color:#7ee8a2;padding-left:10px">✓</span>' : '');
+      si2.title = isSet
+        ? 'Already tagged on this document'
+        : (cur.length ? 'Will be added alongside: ' + cur.join(', ') : '');
+      si2.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        storeTag(fd.name, opt);
+      }});
+      target.appendChild(si2);
     }});
-    scroll.appendChild(item);
+    positionSub(target, relEl, anchorItem);
+  }}
+
+  // One feature row. `showGroupTag` is used in flat search results, where the
+  // category is no longer implied by which submenu you are in.
+  // `valueTarget` / `valueRelEl` say where its value list should open.
+  function makeFeatureItem(fd, valueTarget, valueRelEl, showGroupTag) {{
+    const si = document.createElement('div');
+    si.className = 'ctx-sub-item';
+    si.style.display = 'flex';
+    si.style.alignItems = 'center';
+    const label = showGroupTag ? stripPrefix(fd.name) : fd.name;
+    const tag   = showGroupTag && groupOf(fd.name)
+      ? '<span class="ctx-grp-tag">' + groupOf(fd.name) + '</span>' : '';
+
+    if (fd.type === 'bool') {{
+      si.innerHTML = tag +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">' + label + '</span>';
+      si.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        storeTag(fd.name, true);
+      }});
+      si.addEventListener('mouseenter', function() {{
+        if (valueTarget === subMenu) hideSub2(); else hideSub2();
+      }});
+    }} else {{
+      // Select features are MULTI-VALUE: picking a second value adds to the
+      // first rather than replacing it, so already-tagged values get a ✓.
+      const cur   = CURRENT[fd.name] || [];
+      const badge = cur.length
+        ? '<span style="font-size:10px;color:#7ee8a2;flex-shrink:0;padding-left:6px">✓' +
+          (cur.length > 1 ? cur.length : '') + '</span>'
+        : '';
+      si.innerHTML = tag +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">' + label + '</span>' +
+        badge +
+        '<span style="opacity:.5;flex-shrink:0;padding-left:6px">▸</span>';
+      if (cur.length) si.title = 'Already tagged: ' + cur.join(', ');
+      si.addEventListener('mouseenter', function() {{
+        activeSub2Item = si;
+        buildValueMenu(fd, si, valueTarget, valueRelEl);
+      }});
+    }}
+    return si;
+  }}
+
+  // ── Mode 1: browse by group ───────────────────────────────────────────
+  function renderGroups() {{
+    scroll.innerHTML = '';
+    hideSubMenu();
+    const groups = GROUP_ORDER.concat(UNGROUPED.length ? ['__other__'] : []);
+    groups.forEach(function(grp) {{
+      const fds = grp === '__other__' ? UNGROUPED : FEAT_GROUPS[grp];
+      if (!fds || !fds.length) return;
+      const item = document.createElement('div');
+      item.className = 'ctx-item';
+      item.innerHTML = '<span class="ctx-icon">⊛</span>'
+        + '<span class="ctx-label">' + (grp === '__other__' ? 'Other' : grp) + '</span>'
+        + '<span class="ctx-badge">' + fds.length + ' ▸</span>';
+      item.addEventListener('mouseenter', function() {{
+        hideSub2();
+        activeItem = item;
+        subMenu.innerHTML = '';
+        fds.forEach(function(fd) {{
+          // inside a group submenu the values open one level further out
+          subMenu.appendChild(makeFeatureItem(fd, subMenu2, subMenu, false));
+        }});
+        positionSub(subMenu, menu, item);
+      }});
+      scroll.appendChild(item);
+    }});
+  }}
+
+  // ── Mode 2: flat search results ───────────────────────────────────────
+  function renderSearch(q) {{
+    scroll.innerHTML = '';
+    hideSubMenu();
+    const hits = FEATURES.filter(function(fd) {{ return featMatches(fd, q); }});
+    if (!hits.length) {{
+      const none = document.createElement('div');
+      none.className = 'ctx-empty';
+      none.textContent = 'No feature matches “' + q + '”';
+      scroll.appendChild(none);
+      return;
+    }}
+    hits.forEach(function(fd) {{
+      // results live in the MAIN column, so their values open in subMenu
+      scroll.appendChild(makeFeatureItem(fd, subMenu, menu, true));
+    }});
+  }}
+
+  // ── Search box wiring ─────────────────────────────────────────────────
+  const featQ     = document.getElementById('ctx-feat-q');
+  const featClear = document.getElementById('ctx-feat-clear');
+
+  // Header text to restore when the search box is emptied. The right-click
+  // handler overwrites it with the selected word.
+  let baseHeader = 'TAG FEATURE';
+
+  function applyFeatureQuery() {{
+    const q = featQ.value.trim().toLowerCase();
+    featClear.style.display = q ? 'block' : 'none';
+    header.textContent = q ? ('MATCHING \u201C' + q + '\u201D') : baseHeader;
+    if (q) renderSearch(q); else renderGroups();
+  }}
+
+  featQ.addEventListener('input', applyFeatureQuery);
+  // Keep clicks/keys inside the box from closing the menu or reaching the doc
+  featQ.addEventListener('click',     function(e) {{ e.stopPropagation(); }});
+  featQ.addEventListener('mousedown', function(e) {{ e.stopPropagation(); }});
+  featQ.addEventListener('keydown',   function(e) {{
+    e.stopPropagation();
+    if (e.key === 'Escape') {{ featQ.value = ''; applyFeatureQuery(); }}
   }});
+  featClear.addEventListener('click', function(e) {{
+    e.stopPropagation();
+    featQ.value = '';
+    applyFeatureQuery();
+    featQ.focus();
+  }});
+  document.getElementById('ctx-feat-search')
+          .addEventListener('click', function(e) {{ e.stopPropagation(); }});
+
+  renderGroups();
 
   // ── Right-click handler ─────────────────────────────────────────────────
   document.addEventListener('contextmenu', function(e) {{
@@ -1140,7 +1271,11 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     e.preventDefault();
     hideSubMenu();
 
-    header.textContent = 'TAG: "' + selText.slice(0, 28) + (selText.length > 28 ? '…' : '') + '"';
+    // Reset the feature search each time the menu opens, so a query typed for
+    // a previous word doesn't silently hide most features on the next one.
+    baseHeader = 'TAG: "' + selText.slice(0, 28) + (selText.length > 28 ? '…' : '') + '"';
+    featQ.value = '';
+    applyFeatureQuery();
 
     // First position at click, then adjust to keep fully inside viewport
     const vw = window.innerWidth, vh = window.innerHeight;
@@ -3792,13 +3927,48 @@ with mid:
 
     # ── Feature browser UI (shown only in feature mode) ──────────────────────
     if search_mode == 'feature':
-        _feat_names = [fd[2] for fd in FEATURE_DEFS]
+        # Features are offered grouped by category — the same four groups the
+        # right-click tagging popup uses — instead of one flat list, so the
+        # two places you pick a feature look and behave alike.
+        # Each group gets its own multiselect; the prefix is stripped from the
+        # labels because the group heading already carries it.
+        _FEAT_GROUP_LABELS = [
+            ('PHON.', '🔊  Phonology'),
+            ('MOR.',  '🧩  Morphology'),
+            ('SYN.',  '🔗  Syntax'),
+            ('LEX.',  '📖  Lexicon'),
+        ]
 
-        _sel_feats = st.multiselect(
-            "Features", _feat_names, key="feat_browse_names",
-            placeholder="Choose one or more features…",
-            label_visibility="collapsed",
-        )
+        def _bare_feat(name: str) -> str:
+            for _p in FEAT_PREFIXES:
+                if name.startswith(_p):
+                    return name[len(_p):].strip()
+            return name
+
+        _sel_feats = []
+        _g1, _g2 = st.columns(2)
+        for _gi, (_gprefix, _glabel) in enumerate(_FEAT_GROUP_LABELS):
+            _g_feats = [fd[2] for fd in FEATURE_DEFS if fd[2].startswith(_gprefix)]
+            if not _g_feats:
+                continue
+            with (_g1 if _gi % 2 == 0 else _g2):
+                _sel_feats.extend(st.multiselect(
+                    f"{_glabel}  ({len(_g_feats)})",
+                    _g_feats,
+                    key=f"feat_browse_grp_{_gprefix.rstrip('.')}",
+                    placeholder="none",
+                    format_func=_bare_feat,
+                ))
+
+        # Any feature that somehow carries no known prefix would otherwise be
+        # unreachable from this screen — keep a catch-all so it stays findable.
+        _ungrouped = [fd[2] for fd in FEATURE_DEFS
+                      if not any(fd[2].startswith(p) for p in FEAT_PREFIXES)]
+        if _ungrouped:
+            _sel_feats.extend(st.multiselect(
+                f"❓  Other  ({len(_ungrouped)})", _ungrouped,
+                key="feat_browse_grp_other", placeholder="none",
+            ))
 
         # Condition value is True for bool features, or a LIST of wanted values
         # for select features. A list is used (rather than one value) because
