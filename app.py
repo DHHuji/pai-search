@@ -177,6 +177,32 @@ div[data-testid="stExpander"] p {
   font-size: 0.85rem !important;
 }
 
+/* ── Widget labels EVERYWHERE ──
+   The rule above only covered widgets inside the advanced-options expander.
+   Labels in the main column (the Browse-by-feature group pickers, the value
+   picker, the BUT checkbox) inherit Streamlit's theme colour instead. Since
+   this app forces a light background regardless of the viewer's OS theme, a
+   dark-mode visitor got near-white label text on pale blue — invisible.
+   Pinning the colour here keeps them readable whatever theme is in effect;
+   .streamlit/config.toml pins the theme itself as the belt-and-braces half. */
+div[data-testid="stWidgetLabel"],
+div[data-testid="stWidgetLabel"] *,
+label[data-testid="stWidgetLabel"],
+label[data-testid="stWidgetLabel"] * {
+  color: var(--sky-800) !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-weight: 600 !important;
+}
+/* Checkbox / radio option text sits outside stWidgetLabel */
+div[data-testid="stCheckbox"] label span,
+div[data-testid="stCheckbox"] label p,
+div[data-testid="stRadio"] label span,
+div[data-testid="stRadio"] label p {
+  color: var(--ink) !important;
+}
+/* Help "?" tooltip icon */
+div[data-testid="stTooltipIcon"] svg { fill: var(--sky-600) !important; }
+
 /* ── Search button ── */
 div[data-testid="stButton"] button[kind="primary"] {
   background: var(--sky-600) !important; color: white !important;
@@ -2368,6 +2394,19 @@ def get_feature_defs() -> list[tuple]:
             or ('bool', None)                           # 4. fallback
         )
         resolved.append((idx + 1, col_letter, ht, dtype, options))
+
+    # Sort alphabetically by feature name. FEATURE_DEFS is the single list every
+    # consumer reads from, so ordering it here orders it EVERYWHERE at once —
+    # the tagging popup, the Browse-by-feature pickers, the CSV columns and the
+    # FEATURES block written into each document — instead of each site sorting
+    # its own copy and drifting apart.
+    #
+    # Because every name carries its category prefix, an alphabetical sort also
+    # keeps each category contiguous (LEX. < MOR. < PHON. < SYN.), which is what
+    # the document block relies on to emit each group header exactly once.
+    # Sorting by column position, as before, put features in whatever order the
+    # spreadsheet happened to grow in — unfindable once there were 120 of them.
+    resolved.sort(key=lambda fd: unicodedata.normalize('NFC', fd[2]).casefold())
     return resolved
 
 
@@ -4000,10 +4039,10 @@ with mid:
                  "narrows the results of the feature search above.",
         )
 
-        _feat_search_btn = st.button(
-            "🏷️  Find tagged documents", type="primary", key="feat_browse_btn",
-            disabled=not _feat_conditions,
-        )
+        # NOTE: there is deliberately NO separate "Find tagged documents" button.
+        # Search is triggered the same way in all four modes — by the Search
+        # button in the search bar — so "Search" always means the same thing.
+        st.caption("Choose features above, then press **Search**.")
 
         # If conditions/logic changed since last search, clear stale results so
         # the old result set is not shown and no automatic re-search is triggered.
@@ -4018,10 +4057,8 @@ with mid:
                 st.session_state.pop('_feat_search', None)
                 st.session_state['_search_results'] = []
 
-        # The main Search button (in the search-bar component) fires a feature
-        # search too, so "Search" means the same thing in every mode. The
-        # dedicated button above remains as the in-context primary action.
-        if (_feat_search_btn or search_clicked) and _feat_conditions:
+        # The Search button in the search bar is the only trigger.
+        if search_clicked and _feat_conditions:
             st.session_state['_feat_search'] = (_feat_conditions, _logic)
             st.session_state['_search_results'] = []
         elif search_clicked and not _feat_conditions:

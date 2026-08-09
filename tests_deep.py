@@ -339,11 +339,19 @@ check('B11 PHON.-prefixed version of a bare known feature inherits its options',
       d['PHON. impf. prefix 3.m.sg'][4] == ['bi-','byi-','yi-'],
       str(d.get('PHON. impf. prefix 3.m.sg')))
 
-# B12 — sheet order is preserved
+# B12 — features come back alphabetically, whatever order the sheet grew in
 defs = _run_gfd(['LEX. Z', 'x', 'PHON. A', 'y', 'MOR. M'])
-check('B12 features returned in sheet column order',
-      [fd[2] for fd in defs] == ['LEX. Z', 'PHON. A', 'MOR. M'],
+check('B12 features returned in alphabetical order',
+      [fd[2] for fd in defs] == ['LEX. Z', 'MOR. M', 'PHON. A'],
       str([fd[2] for fd in defs]))
+# The column LETTER must still track the real sheet position after sorting —
+# reads and writes address cells by letter, so a mismatch here corrupts data.
+_bycol = {fd[2]: fd[1] for fd in defs}
+check('B12b sorting does not disturb the resolved column letters',
+      _bycol == {'LEX. Z': 'A', 'PHON. A': 'C', 'MOR. M': 'E'}, str(_bycol))
+check('B12c the 1-based index still matches the sheet position',
+      {fd[2]: fd[0] for fd in defs} == {'LEX. Z': 1, 'PHON. A': 3, 'MOR. M': 5},
+      str({fd[2]: fd[0] for fd in defs}))
 
 # B13 — only unresolvable columns are sent to _infer_column_types
 seen = {}

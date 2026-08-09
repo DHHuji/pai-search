@@ -256,12 +256,15 @@ check('MOR. brand new select options = [f, m, pl, sg]',
 check('MOR. brand new bool inferred as bool (only +/- values)',
       result_types.get('MOR. brand new bool') == 'bool',
       str(result_types))
-check('Column order mirrors sheet order',
-      result_names == ['PHON. aCC > iCC', 'PHON. vocal harmonizing',
-                       'MOR. Fem. Ending', 'MOR. brand new select',
-                       'MOR. brand new bool', 'SYN. Past Con. Mod.',
-                       'LEX. "now"'],
+# Features are sorted ALPHABETICALLY, not by sheet position — one ordering for
+# the popup, the browse pickers, the CSV columns and the document block alike.
+check('Features are ordered alphabetically, not by sheet position',
+      result_names == sorted(result_names, key=lambda n: n.casefold()),
       str(result_names))
+check('Alphabetical order keeps each category contiguous',
+      [n.split('.')[0] for n in result_names]
+      == sorted([n.split('.')[0] for n in result_names]),
+      str([n.split('.')[0] for n in result_names]))
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -516,8 +516,12 @@ for _ch in ['C', 'V', 'v', 'D', 'G', 'E', 'B', 'L']:
           re.search(rf'<b>{re.escape(_ch)}</b>\s*=', source) is not None)
 
 # Z15 — unified Search button
-check('Z15 the main Search button also fires a feature search',
-      '_feat_search_btn or search_clicked' in source)
+check('Z15 the Search button is the ONLY feature-search trigger',
+      'if search_clicked and _feat_conditions:' in source)
+check('Z15b the separate "Find tagged documents" button is gone',
+      'Find tagged documents' not in source.replace(
+          '# NOTE: there is deliberately NO separate "Find tagged documents" button.', '')
+      and 'feat_browse_btn' not in source)
 check('Z16 the old "use the other button" apology is gone',
       'use the **🏷️ Find tagged documents** button' not in source)
 check('Z17 pressing Search with no feature selected gives guidance',

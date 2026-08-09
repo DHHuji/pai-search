@@ -1,0 +1,16 @@
+# The app's CSS forces a light background (--sky-50) on html/body/.stApp.
+# Without pinning the theme, Streamlit follows the viewer's OS setting, so a
+# user in dark mode got Streamlit's dark palette for widget text on top of the
+# app's forced-light background — every widget label rendered near-white on
+# pale blue and was unreadable.
+#
+# Pinning light here makes the two agree for everyone. app.py additionally
+# forces label colours explicitly, so the UI stays readable even if this file
+# is lost or overridden by a Streamlit Cloud setting.
+[theme]
+base = "light"
+primaryColor = "#2075c7"
+backgroundColor = "#f0f8ff"
+secondaryBackgroundColor = "#daeeff"
+textColor = "#1a2b3c"
+font = "monospace"
