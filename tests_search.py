@@ -890,13 +890,14 @@ _DOC = (
 try:
     # ── header shape ──
     hdr = app._csv_feature_header()
-    check('AI1 header has two columns per feature',
-          len(hdr) == 2 * len(app.FEATURE_DEFS), str(len(hdr)))
-    check('AI2 the example column sits next to its value column',
-          hdr[0] == 'PHON. Diphthongs' and hdr[1] == 'PHON. Diphthongs — example',
-          str(hdr[:2]))
-    check('AI3 every feature has an example column',
-          all(f'{fd[2]} — example' in hdr for fd in app.FEATURE_DEFS))
+    check('AI1 header has three columns per feature',
+          len(hdr) == 3 * len(app.FEATURE_DEFS), str(len(hdr)))
+    check('AI2 example and BUT columns sit next to their value column',
+          hdr[:3] == ['PHON. Diphthongs', 'PHON. Diphthongs — example',
+                      'PHON. Diphthongs — BUT'], str(hdr[:3]))
+    check('AI3 every feature has example and BUT columns',
+          all(f'{fd[2]} — example' in hdr and f'{fd[2]} — BUT' in hdr
+              for fd in app.FEATURE_DEFS))
 
     # ── example-word extraction from the doc ──
     with mock.patch.object(app, 'get_doc_content', return_value={'display_html': _DOC}):
@@ -969,14 +970,21 @@ try:
     _fd_sel = (3, 'C', 'MOR. Fem. Ending', 'select', ['-i', '-e', '-a'])
     check('AI21 new format: words inside the brackets',
           app._split_feature_line('MOR. Fem. Ending  [madrase]   -e', _fd_sel)
-          == ('madrase', '-e'))
+          == ('madrase', '-e', ''))
     check('AI22 old format: value inside the brackets, words after',
           app._split_feature_line('MOR. Fem. Ending  [-e]  madrase', _fd_sel)
-          == ('madrase', '-e'))
+          == ('madrase', '-e', ''))
     check('AI23 a line for a different feature is rejected',
-          app._split_feature_line('LEX. "want"  [x]  y', _fd_sel) == (None, None))
+          app._split_feature_line('LEX. "want"  [x]  y', _fd_sel) == (None, None, None))
     check('AI24 a malformed line does not crash',
-          app._split_feature_line('MOR. Fem. Ending  [', _fd_sel) == ('', ''))
+          app._split_feature_line('MOR. Fem. Ending  [', _fd_sel) == ('', '', ''))
+    # Regression: "name  []   value" is what the app writes when a feature has
+    # a value but no example word. An empty bracket must NOT be read as the
+    # old format, or the value comes back as the example and the value blank.
+    check('AI24b empty bracket is new-format, not value/example swapped',
+          app._split_feature_line('MOR. Fem. Ending  []   -e', _fd_sel)
+          == ('', '-e', ''),
+          str(app._split_feature_line('MOR. Fem. Ending  []   -e', _fd_sel)))
 finally:
     app.FEATURE_DEFS = _saved_defs
 
@@ -994,12 +1002,132 @@ check('AI27b no code path assigns the literal string FALSE',
           "'+', '-', 'true', 'false', 'yes', 'no', 'TRUE', 'FALSE', '1', '0',", ''))
 check('AI27c bool export is a plain TRUE-or-blank',
       "cell = 'TRUE' if v else ''" in source)
-check('AI28 example lookup is cached',
-      '@st.cache_data(ttl=3600, show_spinner=False)\ndef get_doc_feature_examples' in source)
+check('AI28 the document annotation parse is cached',
+      '@st.cache_data(ttl=3600, show_spinner=False)\ndef get_doc_feature_annotations' in source)
 check('AI29 example cache is keyed by column set (survives a rename)',
       '_col_set: tuple = ()' in source and '_col_set=tuple((fd[1], fd[2])' in source)
 check('AI30 examples reuse the cached doc content, costing no extra API call',
       'get_doc_content(doc_id, version)' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AJ. BUT — counter-example tagging')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_FD_W = (4, 'D', 'LEX. "want"', 'select', ['badd', 'bidd', 'widd'])
+_sfl = app._split_feature_line
+
+# ── parsing ──
+check('AJ1 a line with no BUT yields empty exceptions',
+      _sfl('LEX. "want"  [biddi]   bidd', _FD_W) == ('biddi', 'bidd', ''))
+check('AJ2 BUT is parsed off the end',
+      _sfl('LEX. "want"  [biddi]   bidd   BUT [widdi]', _FD_W)
+      == ('biddi', 'bidd', 'widdi'))
+check('AJ3 several BUT words',
+      _sfl('LEX. "want"  [biddi]   bidd   BUT [widdi, waddi]', _FD_W)[2]
+      == 'widdi, waddi')
+check('AJ4 BUT does not corrupt the value',
+      _sfl('LEX. "want"  [biddi]   bidd   BUT [widdi]', _FD_W)[1] == 'bidd')
+check('AJ5 BUT with no example words',
+      _sfl('LEX. "want"  []   bidd   BUT [widdi]', _FD_W) == ('', 'bidd', 'widdi'))
+check('AJ6 BUT on a line with no value',
+      _sfl('LEX. "want"  [biddi]   BUT [widdi]', _FD_W)[2] == 'widdi')
+check('AJ7 a stray "BUT" in the example text is not treated as a marker',
+      _sfl('LEX. "want"  [but not this]   bidd', _FD_W)[2] == '',
+      str(_sfl('LEX. "want"  [but not this]   bidd', _FD_W)))
+check('AJ8 the marker constant is exported', app.FEAT_BUT_MARK == 'BUT')
+
+# ── reading from a document ──
+_DOC_BUT = (
+    '<html><body><p>FEATURES:</p><p>LEX.</p>'
+    '<p>LEX. &quot;want&quot;  [biddi ašrab]   bidd   BUT [widdi, waddi]</p>'
+    '</body></html>'
+)
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = [_FD_W]
+try:
+    with mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': _DOC_BUT}):
+        _ann = app.get_doc_feature_annotations('d1')
+        _ex  = app.get_doc_feature_examples('d1')
+        _but = app.get_doc_feature_exceptions('d1')
+    check('AJ9 annotations carry example and but together',
+          _ann['LEX. "want"'] == {'example': 'biddi ašrab', 'but': 'widdi, waddi'},
+          str(_ann))
+    check('AJ10 the examples wrapper still returns plain strings',
+          _ex == {'LEX. "want"': 'biddi ašrab'}, str(_ex))
+    check('AJ11 the exceptions wrapper returns the BUT words',
+          _but == {'LEX. "want"': 'widdi, waddi'}, str(_but))
+
+    # ── CSV ──
+    hdrW = app._csv_feature_header()
+    check('AJ12 each feature gets a BUT column',
+          hdrW == ['LEX. "want"', 'LEX. "want" — example', 'LEX. "want" — BUT'],
+          str(hdrW))
+    with mock.patch.object(app, 'get_sheet_features', return_value={'D': 'bidd'}), \
+         mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': _DOC_BUT}):
+        cw = app._csv_feature_cells(5, 'd1')
+    check('AJ13 CSV exports value, example and BUT',
+          cw == ['bidd', 'biddi ašrab', 'widdi, waddi'], str(cw))
+    with mock.patch.object(app, 'get_sheet_features', return_value={'D': 'bidd'}), \
+         mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': '<p>none</p>'}):
+        cw2 = app._csv_feature_cells(5, 'd1')
+    check('AJ14 a feature with no exception exports a blank BUT cell',
+          cw2 == ['bidd', '', ''], str(cw2))
+finally:
+    app.FEATURE_DEFS = _saved
+
+# ── the doc rewrite must never silently drop an exception ──
+check('AJ15 the doc parser captures existing BUT before parsing the value',
+      'existing_buts[fd[1]] = _bm.group(1).strip()' in source)
+check('AJ16 the rewrite merges rather than replaces exceptions',
+      'if _bw not in _but_existing:' in source)
+check('AJ17 the rebuilt line re-emits the BUT suffix',
+      "line += f'   {FEAT_BUT_MARK} [{but_merged}]'" in source)
+check('AJ18 update_gdoc_features_section accepts exception words',
+      'exception_words: dict | None = None' in source)
+check('AJ19 a feature tagged ONLY with an exception still gets a line',
+      'c for c in (exception_words or {}) if c not in pending_vals' in source)
+check('AJ20 an exception-only tag keeps the value the line already had',
+      '_pe, _pv, _pb = _split_feature_line(_prev, fd)' in source)
+check('AJ21 deletion is suppressed when an exception is being recorded',
+      "and not (exception_words or {}).get(col_l)" in source)
+
+# ── tagging UI ──
+check('AJ22 storeTag carries a kind',            "function storeTag(featureName, value, kind)" in source)
+check('AJ23 the popup has a BUT branch',         'BUT — exception' in source)
+check('AJ24 the BUT branch lists every feature', "makeFeatureItem(fd, subMenu2, subMenu, true, 'but')" in source)
+check('AJ25 in BUT mode one click tags (no value submenu)',
+      "if (kind === 'but' || fd.type === 'bool')" in source)
+check('AJ26 search results offer a BUT shortcut',
+      'mark as BUT (exception)' in source)
+check('AJ27 the bridge routes but-tags separately',
+      "feat_kind == 'but'" in source)
+check('AJ28 staged exceptions accumulate',
+      '_prev = st.session_state[f"{sk}_pending_buts"].get(fd[1], [])' in source)
+check('AJ29 the submit bar shows exception-only stages',
+      'has_changes = bool(pending) or bool(pending_buts)' in source)
+check('AJ30 staged exceptions are passed to the doc writer',
+      'doc_id, pending, pending_words, _pending_buts' in source)
+# Every post-submit reset of pending_words must reset pending_buts too, or a
+# submitted exception would be re-applied on the next save. (The extra
+# pending_buts line is its lazy init in _render_submit_bar.)
+_rw = source.count('_pending_words"] = {}')
+_rb = source.count('_pending_buts"] = {}')
+check('AJ31 pending exceptions are cleared alongside pending words',
+      _rb == _rw + 1, f'words={_rw} buts={_rb}')
+check('AJ31b no reset sits inside another key\'s init guard',
+      '_pending_words"] = {}\n                    st.session_state[f"{sk}_pending_buts"]'
+      not in source)
+
+# ── Feature Browse filter ──
+check('AJ32 a "has exception" filter exists',    'feat_browse_but_only' in source)
+check('AJ33 it is applied only to already-matched documents',
+      "if _include and st.session_state.get('feat_browse_but_only')" in source)
+check('AJ34 exceptions are shown as chips in the results',
+      'val-chip is-but' in source)
+check('AJ35 BUT chips have their own style',     '.val-chip.is-but' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

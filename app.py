@@ -115,6 +115,10 @@ div[data-testid="stTextInput"] input:focus {
 .val-chip.is-empty {
   background: #f5f5f5; border-color: #ddd; color: #999; font-style: italic;
 }
+/* counter-example ("BUT") words — amber, to read as a caveat not a value */
+.val-chip.is-but {
+  background: #fff8e0; border-color: #ffe082; color: #7a5f00;
+}
 
 /* ── Active-filter banner (shown when filters are set) ── */
 .filter-banner {
@@ -1143,7 +1147,8 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   // One feature row. `showGroupTag` is used in flat search results, where the
   // category is no longer implied by which submenu you are in.
   // `valueTarget` / `valueRelEl` say where its value list should open.
-  function makeFeatureItem(fd, valueTarget, valueRelEl, showGroupTag) {{
+  function makeFeatureItem(fd, valueTarget, valueRelEl, showGroupTag, kind) {{
+    kind = kind || 'value';
     const si = document.createElement('div');
     si.className = 'ctx-sub-item';
     si.style.display = 'flex';
@@ -1152,16 +1157,16 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     const tag   = showGroupTag && groupOf(fd.name)
       ? '<span class="ctx-grp-tag">' + groupOf(fd.name) + '</span>' : '';
 
-    if (fd.type === 'bool') {{
+    // In BUT mode the word IS the tag, so there is no value to pick — one
+    // click records the exception whatever the feature's type.
+    if (kind === 'but' || fd.type === 'bool') {{
       si.innerHTML = tag +
         '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">' + label + '</span>';
       si.addEventListener('click', function(e) {{
         e.stopPropagation();
-        storeTag(fd.name, true);
+        storeTag(fd.name, kind === 'but' ? null : true, kind);
       }});
-      si.addEventListener('mouseenter', function() {{
-        if (valueTarget === subMenu) hideSub2(); else hideSub2();
-      }});
+      si.addEventListener('mouseenter', function() {{ hideSub2(); }});
     }} else {{
       // Select features are MULTI-VALUE: picking a second value adds to the
       // first rather than replacing it, so already-tagged values get a ✓.
@@ -1208,6 +1213,41 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
       }});
       scroll.appendChild(item);
     }});
+
+    // ── "BUT" branch: tag the selected word as a COUNTER-EXAMPLE ──────────
+    // A feature can be present in a text while particular words show it not
+    // applying. Those words are recorded against the feature as exceptions.
+    // Deliberately a separate branch rather than an extra item inside each
+    // feature: it leaves the normal tagging path untouched, and it is not a
+    // mode, so there is no hidden state to forget you left switched on.
+    if (FEATURES.length) {{
+      const butItem = document.createElement('div');
+      butItem.className = 'ctx-item';
+      butItem.style.borderTop = '1px solid #333';
+      butItem.style.marginTop = '4px';
+      butItem.style.paddingTop = '8px';
+      butItem.innerHTML =
+        '<span class="ctx-icon" style="color:#fbbf24">⚠</span>' +
+        '<span class="ctx-label" style="color:#fbbf24">BUT — exception</span>' +
+        '<span class="ctx-badge">▸</span>';
+      butItem.title = 'Mark this word as a counter-example: the feature is in '
+                    + 'the text, but this word shows it not applying';
+      butItem.addEventListener('mouseenter', function() {{
+        hideSub2();
+        activeItem = butItem;
+        subMenu.innerHTML = '';
+        const hint = document.createElement('div');
+        hint.className = 'ctx-empty';
+        hint.style.color = '#fbbf24';
+        hint.textContent = 'exception for which feature?';
+        subMenu.appendChild(hint);
+        FEATURES.forEach(function(fd) {{
+          subMenu.appendChild(makeFeatureItem(fd, subMenu2, subMenu, true, 'but'));
+        }});
+        positionSub(subMenu, menu, butItem);
+      }});
+      scroll.appendChild(butItem);
+    }}
   }}
 
   // ── Mode 2: flat search results ───────────────────────────────────────
@@ -1225,6 +1265,18 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
     hits.forEach(function(fd) {{
       // results live in the MAIN column, so their values open in subMenu
       scroll.appendChild(makeFeatureItem(fd, subMenu, menu, true));
+      // and a compact BUT shortcut beside each hit, so a searched-for feature
+      // can be tagged as an exception without backing out to the BUT branch
+      const bx = document.createElement('div');
+      bx.className = 'ctx-sub-item';
+      bx.style.cssText = 'padding:2px 16px 6px 34px;font-size:11px;color:#fbbf24';
+      bx.textContent = '⚠ mark as BUT (exception)';
+      bx.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        storeTag(fd.name, null, 'but');
+      }});
+      bx.addEventListener('mouseenter', function() {{ hideSubMenu(); }});
+      scroll.appendChild(bx);
     }});
   }}
 
@@ -1319,17 +1371,20 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   }}
 
   // ── Store tag in localStorage → bridge component picks it up ───────────
-  function storeTag(featureName, value) {{
+  // kind: 'value' (normal tag) or 'but' (counter-example — the selected word
+  // shows the feature NOT applying, even though the feature is in the text).
+  function storeTag(featureName, value, kind) {{
+    kind = kind || 'value';
     highlightCurrentSelection();   // immediate visual feedback in document
-    // Also flash the menu header green for 700ms
-    header.textContent = '✓  ' + featureName;
-    header.style.color = '#4ade80';
+    header.textContent = (kind === 'but' ? '⚠ BUT  ' : '✓  ') + featureName;
+    header.style.color = kind === 'but' ? '#fbbf24' : '#4ade80';
     hideSubMenu();
     setTimeout(function() {{ menu.style.display = 'none'; header.style.color = ''; }}, 700);
     try {{
       localStorage.setItem('pai_pending_tag', JSON.stringify({{
         feature:   featureName,
         value:     value,
+        kind:      kind,
         docId:     DOC_ID,
         selText:   selText,
         timestamp: Date.now()
@@ -2412,32 +2467,54 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
     }
 
 
+# Marker for counter-example ("exception") words in a FEATURES line.
+# A feature can be present in a text while specific words show it NOT applying;
+# those words are recorded after this marker on the SAME line, e.g.
+#     LEX. "want"  [biddi ašrab]   bidd   BUT [widdi, waddi]
+FEAT_BUT_MARK = 'BUT'
+_BUT_RE = re.compile(r'\s+' + FEAT_BUT_MARK + r'\s*\[([^\]]*)\]\s*$')
+
+
 def _split_feature_line(text: str, fd: tuple) -> tuple:
     """
-    Parse ONE line of a document's FEATURES block into (example_words, value).
+    Parse ONE line of a document's FEATURES block into
+    (example_words, value, exception_words).
 
-    Two formats exist across the corpus:
+    Two value/example formats exist across the corpus:
         new: "name  [word1; word2]   value"
         old: "name  [value]  word1, word2"
     The bracket content is read as the VALUE (old format) when it matches one of
     the feature's known options, or looks like an all-ASCII code rather than
     transcription; otherwise it is read as the example words (new format).
 
-    Returns (None, None) when the line does not belong to `fd`.
+    An optional "BUT [w1, w2]" suffix carries counter-examples and is stripped
+    off first, so it can never be mistaken for part of the value.
+
+    Returns (None, None, None) when the line does not belong to `fd`.
     """
     if not text.startswith(fd[2] + '  ['):
-        return (None, None)
-    bo = text.find('[')
-    bc = text.find(']', bo)
+        return (None, None, None)
+
+    # Peel the BUT suffix off before anything else.
+    _m = _BUT_RE.search(text)
+    exceptions = _m.group(1).strip() if _m else ''
+    core = text[:_m.start()] if _m else text
+
+    bo = core.find('[')
+    bc = core.find(']', bo)
     if bo < 0 or bc < 0:
-        return ('', '')
-    inside = text[bo + 1:bc].strip()
-    after  = text[bc + 1:].strip()
+        return ('', '', exceptions)
+    inside = core[bo + 1:bc].strip()
+    after  = core[bc + 1:].strip()
     known_vals = set(fd[4] or []) | {'+', '', 'TRUE', 'FALSE', 'True', 'False'}
-    is_old = (inside in known_vals or
+    # An EMPTY bracket is always new-format ("name  []   value"), which is what
+    # this code writes when a feature has a value but no example word yet.
+    # Without this guard '' matched known_vals, the line was read as old-format,
+    # and the value came back as the example word with the value left blank.
+    is_old = inside != '' and (inside in known_vals or
               (not any(ord(c) > 127 for c in inside) and inside == inside.upper()
                and not inside.replace(' ', '').isalpha()))
-    return (after, inside) if is_old else (inside, after)
+    return (after, inside, exceptions) if is_old else (inside, after, exceptions)
 
 
 def _doc_html_to_lines(html_doc: str) -> list:
@@ -2451,20 +2528,15 @@ def _doc_html_to_lines(html_doc: str) -> list:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_doc_feature_examples(doc_id: str, version: int = 0,
-                             _col_set: tuple = ()) -> dict:
+def get_doc_feature_annotations(doc_id: str, version: int = 0,
+                                _col_set: tuple = ()) -> dict:
     """
-    {feature_name: "word1; word2"} — the words a researcher tagged as the
-    example for each feature in this document.
+    {feature_name: {'example': "w1; w2", 'but': "w3, w4"}} for one document.
 
-    These words live ONLY in the Google Doc's FEATURES block; the spreadsheet
-    stores just the value. They are therefore read back out of the doc's HTML
-    export — which get_doc_content() already cached while searching, so this
-    costs no extra API call for any document that appeared in the results.
-
-    _col_set is part of the cache key so a renamed feature column invalidates
-    it, the same way _get_all_sheet_features() is keyed.
-    Returns {} if the document cannot be read.
+    Both live only in the Google Doc's FEATURES block — the spreadsheet stores
+    just the value — and both are read from the doc's HTML export, which
+    get_doc_content() already cached during the search. Returns {} if the
+    document cannot be read.
     """
     try:
         html_doc = (get_doc_content(doc_id, version) or {}).get('display_html', '')
@@ -2482,27 +2554,61 @@ def get_doc_feature_examples(doc_id: str, version: int = 0,
         if not in_feats or not line or line in FEAT_PREFIXES:
             continue
         for fd in FEATURE_DEFS:
-            ex, _val = _split_feature_line(line, fd)
+            ex, _val, but = _split_feature_line(line, fd)
             if ex is not None:          # line belongs to this feature
-                if ex:
-                    out[fd[2]] = ex
+                if ex or but:
+                    out[fd[2]] = {'example': ex or '', 'but': but or ''}
                 break
     return out
 
 
+def get_doc_feature_examples(doc_id: str, version: int = 0,
+                             _col_set: tuple = ()) -> dict:
+    """
+    {feature_name: "word1; word2"} — the words a researcher tagged as the
+    example for each feature in this document.
+
+    These words live ONLY in the Google Doc's FEATURES block; the spreadsheet
+    stores just the value. They are therefore read back out of the doc's HTML
+    export — which get_doc_content() already cached while searching, so this
+    costs no extra API call for any document that appeared in the results.
+
+    _col_set is part of the cache key so a renamed feature column invalidates
+    it, the same way _get_all_sheet_features() is keyed.
+    Returns {} if the document cannot be read.
+    """
+    return {
+        name: ann['example']
+        for name, ann in get_doc_feature_annotations(doc_id, version, _col_set).items()
+        if ann.get('example')
+    }
+
+
+def get_doc_feature_exceptions(doc_id: str, version: int = 0,
+                               _col_set: tuple = ()) -> dict:
+    """{feature_name: "w1, w2"} — the BUT (counter-example) words for a doc."""
+    return {
+        name: ann['but']
+        for name, ann in get_doc_feature_annotations(doc_id, version, _col_set).items()
+        if ann.get('but')
+    }
+
+
 def _csv_feature_header() -> list:
     """
-    CSV column names for the feature block: every feature contributes TWO
-    columns — its value, and immediately beside it the word that was tagged
-    as the example for that value.
+    CSV column names for the feature block: every feature contributes THREE
+    columns — its value, the word tagged as the example for that value, and
+    the BUT column holding any counter-example words (tagged words that show
+    the feature NOT applying even though the feature is present in the text).
     """
-    return [x for fd in FEATURE_DEFS for x in (fd[2], f'{fd[2]} — example')]
+    return [x for fd in FEATURE_DEFS
+            for x in (fd[2], f'{fd[2]} — example', f'{fd[2]} — BUT')]
 
 
 def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
     """
-    Flat [value, example, value, example, ...] in FEATURE_DEFS order, matching
-    _csv_feature_header().
+    Flat [value, example, BUT, value, example, BUT, ...] in FEATURE_DEFS order,
+    matching _csv_feature_header().
 
     A bool feature exports 'TRUE' or an EMPTY cell — never 'FALSE'.
 
@@ -2527,16 +2633,16 @@ def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
         except Exception:
             vals = {}
 
-    examples: dict = {}
+    annotations: dict = {}
     if doc_id:
         try:
             _ver = st.session_state.get('_doc_versions', {}).get(doc_id, 0)
-            examples = get_doc_feature_examples(
+            annotations = get_doc_feature_annotations(
                 doc_id, _ver,
                 _col_set=tuple((fd[1], fd[2]) for fd in FEATURE_DEFS),
             ) or {}
         except Exception:
-            examples = {}
+            annotations = {}
 
     out = []
     for fd in FEATURE_DEFS:
@@ -2547,8 +2653,10 @@ def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
             cell = 'TRUE' if v else ''
         else:
             cell = v if v not in (None, '', False) else ''
+        _ann = annotations.get(fd[2], {})
         out.append(cell)
-        out.append(examples.get(fd[2], ''))
+        out.append(_ann.get('example', ''))
+        out.append(_ann.get('but', ''))
     return out
 
 
@@ -2737,6 +2845,7 @@ def update_gdoc_features_section(
     doc_id: str,
     pending_vals: dict,       # {col_letter: value | None}  — newly tagged features
     example_words: dict | None = None,   # {col_letter: "word"} newly tagged words
+    exception_words: dict | None = None, # {col_letter: "word"} newly tagged BUT words
 ):
     """
     Update the FEATURES section in the Google Doc — surgical update only.
@@ -2757,6 +2866,7 @@ def update_gdoc_features_section(
     feat_start = feat_end = None
     existing_lines: dict[str, str] = {}   # feature_name → "full line text"
     existing_examples: dict[str, str] = {}  # col_letter → "word1, word2"
+    existing_buts:     dict[str, str] = {}  # col_letter → "w1, w2" (BUT words)
 
     para_texts: list[tuple[int, str]] = []
     for elem in body_content:
@@ -2795,6 +2905,13 @@ def update_gdoc_features_section(
                 if text.startswith(fd[2] + '  ['):
                     existing_lines[fd[2]] = text
                     matched = True
+                    # Peel any "BUT [...]" suffix off first and remember it, so
+                    # it neither corrupts the value parse below nor gets dropped
+                    # when this line is rebuilt further down.
+                    _bm = _BUT_RE.search(text)
+                    if _bm:
+                        existing_buts[fd[1]] = _bm.group(1).strip()
+                        text = text[:_bm.start()]
                     bo = text.find('[')
                     bc = text.find(']', bo)
                     if bo >= 0 and bc >= 0:
@@ -2827,18 +2944,32 @@ def update_gdoc_features_section(
     # Start with all existing lines, then apply pending changes
     updated_lines: dict[str, str] = dict(existing_lines)
 
-    for col_l, new_val in pending_vals.items():
+    # A feature may appear in pending_buts WITHOUT a value — someone tagged only
+    # a counter-example. Iterate the union so that still produces a line.
+    _touched = list(pending_vals.keys()) + [
+        c for c in (exception_words or {}) if c not in pending_vals
+    ]
+    for col_l in _touched:
+        new_val = pending_vals.get(col_l)
         fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
         if not fd:
             continue
         name = fd[2]
 
-        # Deletion: empty value removes the line
-        if not new_val and new_val is not True:
+        # Deletion: empty value removes the line — but only when no exception
+        # is being recorded for it in the same submission.
+        if (not new_val and new_val is not True
+                and not (exception_words or {}).get(col_l)):
             updated_lines.pop(name, None)
             continue
 
-        val_str = '+' if fd[3] == 'bool' else str(new_val)
+        if new_val is None:
+            # exception-only tag: keep whatever value the line already had
+            _prev = existing_lines.get(name, '')
+            _pe, _pv, _pb = _split_feature_line(_prev, fd) if _prev else ('', '', '')
+            val_str = _pv or ''
+        else:
+            val_str = '+' if fd[3] == 'bool' else str(new_val)
 
         # Merge example words: keep existing ones (from new-format lines),
         # append new word if not already present.  Separator is semicolon.
@@ -2858,12 +2989,27 @@ def update_gdoc_features_section(
         else:
             ex_merged = ex_existing
 
-        # New format: name  [word1; word2]   val_str
+        # Merge BUT (counter-example) words the same way: never replace, only
+        # add. Two researchers can each spot a different exception.
+        _but_existing = [w.strip() for w in
+                         (existing_buts.get(col_l, '') or '').split(',') if w.strip()]
+        _but_raw = (exception_words or {}).get(col_l) or ''
+        _but_new = ([w.strip() for w in _but_raw if w and str(w).strip()]
+                    if isinstance(_but_raw, list)
+                    else ([_but_raw.strip()] if _but_raw.strip() else []))
+        for _bw in _but_new:
+            if _bw not in _but_existing:
+                _but_existing.append(_bw)
+        but_merged = ', '.join(_but_existing)
+
+        # New format: name  [word1; word2]   val_str   BUT [w1, w2]
         line = f'{name}  [{ex_merged}]'
         if val_str and val_str not in ('+', ''):
             line += f'   {val_str}'
         elif val_str == '+':
             line += '   +'
+        if but_merged:
+            line += f'   {FEAT_BUT_MARK} [{but_merged}]'
         updated_lines[name] = line
 
     # ── Reconstruct the FEATURES block with section headers ───────────────────
@@ -3258,10 +3404,16 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     if f"{sk}_doc_only" not in st.session_state:
         st.session_state[f"{sk}_doc_only"] = {}
 
+    if f"{sk}_pending_buts" not in st.session_state:
+        st.session_state[f"{sk}_pending_buts"] = {}
+
     pending  = st.session_state[f"{sk}_pending"]
     doc_only = st.session_state[f"{sk}_doc_only"]
+    pending_buts = st.session_state[f"{sk}_pending_buts"]
 
-    has_changes = bool(pending)
+    # A word can be staged as a counter-example WITHOUT any value being tagged,
+    # so the submit bar must appear for those too.
+    has_changes = bool(pending) or bool(pending_buts)
 
     # ── Delete existing tags (always shown when there are tagged features) ──
     if sheet_rows:
@@ -3320,8 +3472,26 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     # on its own before submitting — no need to clear everything just to give
     # up on one mis-tagged word out of several.
     pending_words = st.session_state.get(f"{sk}_pending_words", {})
-    n = len(pending)
+    n = len(set(pending) | set(pending_buts))
     st.markdown(f"🏷️ **{n} feature(s) staged** — remove any you don't want, then submit the rest:")
+
+    # Staged counter-examples, each removable on its own
+    for _bcol, _bwords in list(pending_buts.items()):
+        _bfd = next((f for f in FEATURE_DEFS if f[1] == _bcol), None)
+        _blabel = _bfd[2] if _bfd else _bcol
+        if isinstance(_bwords, str):
+            _bwords = [_bwords] if _bwords else []
+        _br1, _br2 = st.columns([5, 1])
+        with _br1:
+            st.markdown(
+                f"⚠️ **BUT** · `{_blabel}` — "
+                + ' '.join(f'<span class="val-chip">{w}</span>' for w in _bwords),
+                unsafe_allow_html=True,
+            )
+        with _br2:
+            if st.button("✕", key=f"{sk}_rmbut_{_bcol}", help="Discard this exception"):
+                pending_buts.pop(_bcol, None)
+                st.rerun()
 
     for col_l, val in list(pending.items()):
         fd = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
@@ -3370,6 +3540,7 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
             st.session_state[f"{sk}_pending"] = {}
             st.session_state[f"{sk}_doc_only"] = {}
             st.session_state[f"{sk}_pending_words"] = {}
+            st.session_state[f"{sk}_pending_buts"] = {}
             st.rerun()
 
     if st.session_state.get(f"{sk}_confirm"):
@@ -3461,7 +3632,9 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 # Update Google Doc: only the pending features (NOT the full table)
                 try:
                     pending_words = st.session_state.get(f"{sk}_pending_words", {})
-                    update_gdoc_features_section(doc_id, pending, pending_words)
+                    _pending_buts = st.session_state.get(f"{sk}_pending_buts", {})
+                    update_gdoc_features_section(
+                        doc_id, pending, pending_words, _pending_buts)
                 except Exception as e:
                     st.error(f"Google Doc update failed: {e}")
                     st.session_state[f"{sk}_confirm"] = False
@@ -3488,6 +3661,7 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 st.session_state[f"{sk}_pending"] = {}
                 st.session_state[f"{sk}_doc_only"] = {}
                 st.session_state[f"{sk}_pending_words"] = {}
+                st.session_state[f"{sk}_pending_buts"] = {}
                 st.session_state[f"{sk}_confirm"] = False
                 st.success(f"✅  Features saved for **{doc_name}**!")
                 st.rerun()
@@ -3788,6 +3962,20 @@ with mid:
                     ),
                 )
 
+        # Refine to documents where the feature has a recorded counter-example.
+        # This is a POST-filter on the documents a feature search already
+        # matched, not a standalone query: exceptions live in the Google Docs,
+        # not the sheet, so checking them means reading documents. Applying it
+        # to a result set (usually a few dozen, and normally already cached)
+        # keeps it fast; scanning all 778 up front would not be.
+        _but_only = st.checkbox(
+            "⚠️  Only documents that have a BUT (exception) for the feature",
+            key="feat_browse_but_only",
+            disabled=not _feat_conditions,
+            help="Counter-examples are read from each matched document, so this "
+                 "narrows the results of the feature search above.",
+        )
+
         _feat_search_btn = st.button(
             "🏷️  Find tagged documents", type="primary", key="feat_browse_btn",
             disabled=not _feat_conditions,
@@ -4008,6 +4196,7 @@ if _bridge_tag:
             # ── Feature tag from context menu ──────────────────────────────────
             feat_name = _bridge_tag.get('feature', '')
             feat_val  = _bridge_tag.get('value')
+            feat_kind = _bridge_tag.get('kind', 'value')
             fd = _FEAT_BY_NAME.get(feat_name)
             if fd and doc_id:
                 sk = f"feat_{doc_id}"
@@ -4015,6 +4204,24 @@ if _bridge_tag:
                     st.session_state[f"{sk}_pending"] = {}
                 if f"{sk}_pending_words" not in st.session_state:
                     st.session_state[f"{sk}_pending_words"] = {}
+                if f"{sk}_pending_buts" not in st.session_state:
+                    st.session_state[f"{sk}_pending_buts"] = {}
+
+            if fd and doc_id and feat_kind == 'but':
+                # Counter-example: the selected word is the tag. Accumulate —
+                # two researchers can each spot a different exception.
+                _sel = _bridge_tag.get('selText', '').strip()
+                if _sel:
+                    _prev = st.session_state[f"{sk}_pending_buts"].get(fd[1], [])
+                    if isinstance(_prev, str):
+                        _prev = [_prev] if _prev else []
+                    if _sel not in _prev:
+                        _prev = list(_prev) + [_sel]
+                    st.session_state[f"{sk}_pending_buts"][fd[1]] = _prev
+                st.session_state[f"{sk}_auto_expand"] = True
+                st.session_state['_last_bridge_ts'] = _bt_ts
+
+            elif fd and doc_id:
                 # Select features are multi-value, so picking a SECOND value for
                 # the same feature in one tagging session must add to the first,
                 # not replace it (the same rule the spreadsheet write applies).
@@ -4558,6 +4765,24 @@ if st.session_state.get('_feat_search') and corpus:
                 _matched_vals[_fn] = _cur
 
             _include = all(_cond_results) if _logic == 'AND' else any(_cond_results)
+
+            # "has a BUT" refinement — only consulted for documents that already
+            # matched, and only when the box is ticked, so the document read is
+            # never paid for by an ordinary search.
+            _but_words = {}
+            if _include and st.session_state.get('feat_browse_but_only'):
+                try:
+                    _dver = st.session_state.get('_doc_versions', {}).get(_doc['doc_id'], 0)
+                    _all_but = get_doc_feature_exceptions(
+                        _doc['doc_id'], _dver,
+                        _col_set=tuple((f[1], f[2]) for f in FEATURE_DEFS),
+                    ) or {}
+                except Exception:
+                    _all_but = {}
+                _but_words = {n: w for n, w in _all_but.items()
+                              if n in {c[0] for c in _feat_conditions}}
+                _include = bool(_but_words)
+
             if _include:
                 _feat_rows.append({
                     'name':        _doc['name'],
@@ -4566,6 +4791,7 @@ if st.session_state.get('_feat_search') and corpus:
                     'village':     _doc.get('village', ''),
                     'community':   _doc.get('community', ''),
                     'values':      _matched_vals,
+                    'buts':        _but_words,
                 })
 
     if not _feat_rows:
@@ -4697,6 +4923,13 @@ if st.session_state.get('_feat_search') and corpus:
                                        for p in _cparts) or \
                               '<span class="val-chip is-empty">not tagged</span>'
                     _chip_rows.append(f'<b>{_cfn}</b> {_cchips}')
+                for _bfn, _bwv in (_fr.get('buts') or {}).items():
+                    _bparts = [w.strip() for w in str(_bwv).split(',') if w.strip()]
+                    _chip_rows.append(
+                        '<b style="color:#a16207">⚠ BUT ' + _bfn + '</b> '
+                        + ' '.join(f'<span class="val-chip is-but">{p}</span>'
+                                   for p in _bparts)
+                    )
                 if _chip_rows:
                     st.markdown(
                         '<div style="margin:-4px 0 10px">'

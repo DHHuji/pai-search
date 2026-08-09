@@ -320,8 +320,8 @@ check('hideSub2() function present',       'hideSub2' in html_out)
 check('subMenu2 variable/usage in JS',     'subMenu2' in html_out)
 check('Feature name "PHON. aCC > iCC" in output',
       'PHON. aCC > iCC' in html_out)
-check('storeTag(fd.name, true) for bool branch',
-      'storeTag(fd.name, true)' in html_out)
+check('storeTag carries a kind (value vs BUT exception)',
+      "storeTag(fd.name, kind === 'but' ? null : true, kind)" in html_out)
 check('storeTag(fd.name, opt) for select branch',
       'storeTag(fd.name, opt)' in html_out)
 check('Old flat checkbox icon builder removed',
