@@ -103,6 +103,19 @@ div[data-testid="stTextInput"] input:focus {
   background: white !important;
 }
 
+/* ── Feature value chips ──
+   Mirrors how Google Sheets renders a native multi-select cell, so a value
+   tagged in the sheet and the same value shown in the app look alike. */
+.val-chip {
+  display: inline-block; background: #eef4fb; border: 1px solid #b8deff;
+  border-radius: 999px; padding: 1px 10px; margin: 1px 2px;
+  font-family: 'IBM Plex Mono', monospace; font-size: .8rem;
+  color: #0d3f75; white-space: nowrap; line-height: 1.6;
+}
+.val-chip.is-empty {
+  background: #f5f5f5; border-color: #ddd; color: #999; font-style: italic;
+}
+
 /* ── Active-filter banner (shown when filters are set) ── */
 .filter-banner {
   background: #e3f2fd; border: 1.5px solid #90caf9; border-radius: 10px;
@@ -1665,7 +1678,13 @@ def _feat_val_norm(v) -> str:
 # A naive split(';') would shred those into two bogus tags, so the parser
 # first tries to match whole known options (longest first) and only falls
 # back to separator-splitting for text it doesn't recognise.
-FEAT_VALUE_SEP = '; '
+#
+# WRITE format is ', ' because the feature columns are being migrated to
+# Google Sheets' NATIVE multi-select dropdowns, which store their values
+# comma-separated and render them as chips. Writing '; ' into such a column
+# would produce one invalid value instead of two chips.
+# READ accepts both ',' and ';' so columns not yet migrated keep working.
+FEAT_VALUE_SEP = ', '
 
 
 def _split_feat_values(raw, options=None) -> list[str]:
@@ -3781,7 +3800,12 @@ with mid:
             label_visibility="collapsed",
         )
 
-        _feat_conditions = []   # list of (feat_name, feat_def, value)
+        # Condition value is True for bool features, or a LIST of wanted values
+        # for select features. A list is used (rather than one value) because
+        # feature cells are multi-value in the sheet — mirroring the native
+        # multi-select dropdown, several values can be searched at once and a
+        # document matches if it carries ANY of them.
+        _feat_conditions = []   # list of (feat_name, feat_def, value|list)
         if _sel_feats:
             for _sf in _sel_feats:
                 _fd = next(fd for fd in FEATURE_DEFS if fd[2] == _sf)
@@ -3791,12 +3815,16 @@ with mid:
                     # "— None (not tagged) —" lets the user search for documents
                     # where this feature column is empty, instead of only being
                     # able to pick one of the predefined tag values.
-                    _v = st.selectbox(
+                    _vals = st.multiselect(
                         f"Value — {_sf}", [FEAT_NONE_OPTION] + (_fd[4] or []),
                         key=f"feat_browse_val_{_sf}",
                         label_visibility="visible",
+                        placeholder="Any value…",
+                        help="Pick one or more. A document matches if it is "
+                             "tagged with any of them.",
                     )
-                    _feat_conditions.append((_sf, _fd, _v))
+                    if _vals:
+                        _feat_conditions.append((_sf, _fd, list(_vals)))
 
             _logic = 'AND'
             if len(_feat_conditions) > 1:
@@ -4541,7 +4569,16 @@ if st.session_state.get('_feat_search') and corpus:
     # Build stats bar label
     _cond_labels = []
     for _fn, _fd, _fv in _feat_conditions:
-        _cond_labels.append(f"<b>{_fn}</b> = {'✓' if _fd[3]=='bool' else _fv}")
+        # _fv is True (bool feature) or a list of wanted values — render a
+        # list as chips so it reads the same way the sheet displays them.
+        if _fd[3] == 'bool':
+            _cond_labels.append(f"<b>{_fn}</b> = ✓")
+        else:
+            _chips = ' '.join(
+                f'<span class="val-chip">{v}</span>'
+                for v in (_fv if isinstance(_fv, (list, tuple)) else [_fv])
+            )
+            _cond_labels.append(f"<b>{_fn}</b> = {_chips}")
     _logic_sep = f"&nbsp; <span style='color:#60aee8'>{_logic}</span> &nbsp;"
     st.markdown(f"""
     <div class="stats-bar">
@@ -4580,16 +4617,19 @@ if st.session_state.get('_feat_search') and corpus:
                         _seen_col_vals[_fn].add(_one)
                 if _fd[3] == 'bool':
                     _hit = bool(_cur) is True
-                elif _fv == FEAT_NONE_OPTION:
-                    # "None" = the spreadsheet column is empty / not yet tagged
-                    _hit = not str(_cur or '').strip()
                 else:
-                    # Membership, not equality: a select cell may hold several
-                    # values ("-e; -a") because different researchers tagged
-                    # different reflexes. Searching for either one must find it.
+                    # _fv is a list of wanted values. The cell itself may hold
+                    # several values, so this is a set-intersection test:
+                    # the document matches if ANY wanted value is present.
                     # _feat_value_matches normalises (NFC, case, whitespace) so
                     # composed vs. decomposed diacritics still compare equal.
-                    _hit = _feat_value_matches(_cur, _fv, _fd[4])
+                    _wanted = _fv if isinstance(_fv, (list, tuple)) else [_fv]
+                    _is_empty = not str(_cur or '').strip()
+                    _hit = any(
+                        _is_empty if _w == FEAT_NONE_OPTION
+                        else _feat_value_matches(_cur, _w, _fd[4])
+                        for _w in _wanted
+                    )
                 _cond_results.append(_hit)
                 _matched_vals[_fn] = _cur
 
@@ -4605,7 +4645,12 @@ if st.session_state.get('_feat_search') and corpus:
                 })
 
     if not _feat_rows:
-        _desc = f" {_logic} ".join(f"{n}={'✓' if d[3]=='bool' else v}" for n,d,v in _feat_conditions)
+        def _fmt_cond(n, d, v):
+            if d[3] == 'bool':
+                return f"{n}=✓"
+            vals = v if isinstance(v, (list, tuple)) else [v]
+            return f"{n}={' / '.join(str(x) for x in vals)}"
+        _desc = f" {_logic} ".join(_fmt_cond(n, d, v) for n, d, v in _feat_conditions)
         st.info(f"No documents found matching: {_desc}")
 
         # Same funnel diagnosis as transcription search: show whether the
@@ -4706,13 +4751,48 @@ if st.session_state.get('_feat_search') and corpus:
         for _fr in _feat_rows:
             _fb_disp_rank += 1   # matches the "#" column written to the CSV above
             _meta = ' · '.join(filter(None, [_fr['village'], _fr['community']]))
+            # Split multi-value cells so the collapsed label reads
+            # "MOR. Fem. Ending = -e / -a" instead of one run-together string.
+            # (An expander label is plain text, so the real chips are rendered
+            #  inside the expander below.)
+            def _fb_vals(fn, v):
+                if v is True:
+                    return '✓'
+                _fdx = _FEAT_BY_NAME.get(fn)
+                _parts = _split_feat_values(v, _fdx[4] if _fdx else None)
+                return ' / '.join(_parts) if _parts else str(v)
+
             _vals_str = '  ·  '.join(
-                f"{fn} = {'✓' if v is True else v}"
+                f"{fn} = {_fb_vals(fn, v)}"
                 for fn, v in _fr['values'].items() if v
             )
             _fb_label_base = f"#{_fb_disp_rank}  ·  📄  {_fr['name']}   ·   {_meta}"
             with st.expander(f"{_fb_label_base}   |  {_vals_str}  |" if _vals_str else _fb_label_base,
                                key=f"feat_exp_{_fr['doc_id']}"):
+                # Tagged values as chips — matches how the sheet displays a
+                # native multi-select cell, and makes it obvious when a
+                # document carries several values for one feature.
+                _chip_rows = []
+                for _cfn, _cv in _fr['values'].items():
+                    if not _cv:
+                        continue
+                    if _cv is True:
+                        _chip_rows.append(
+                            f'<b>{_cfn}</b> <span class="val-chip">✓</span>')
+                        continue
+                    _cfd = _FEAT_BY_NAME.get(_cfn)
+                    _cparts = _split_feat_values(_cv, _cfd[4] if _cfd else None)
+                    _cchips = ' '.join(f'<span class="val-chip">{p}</span>'
+                                       for p in _cparts) or \
+                              '<span class="val-chip is-empty">not tagged</span>'
+                    _chip_rows.append(f'<b>{_cfn}</b> {_cchips}')
+                if _chip_rows:
+                    st.markdown(
+                        '<div style="margin:-4px 0 10px">'
+                        + '<br>'.join(_chip_rows)
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
                 # Document viewer — loaded on demand (same pattern as the main
                 # search results), so the actual transcription text is shown
                 # inline instead of only a "Open in Google Docs" link.

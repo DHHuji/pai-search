@@ -604,7 +604,7 @@ check('AB1 tagging an empty cell', (merged, added, dup) == ('-e', ['-e'], []), s
 
 merged, added, dup = mg('-e', '-a', FEM)
 check('AB2 second value is ADDED, not overwritten',
-      merged == '-e; -a', merged)
+      merged == app._join_feat_values(['-e', '-a']), merged)
 check('AB3 the added value is reported', added == ['-a'], str(added))
 check('AB4 nothing reported as duplicate', dup == [], str(dup))
 
@@ -614,30 +614,37 @@ check('AB6 duplicate is reported, not added',
       added == [] and dup == ['-e'], str((added, dup)))
 
 merged, added, dup = mg('-e; -a', '-i', FEM)
-check('AB7 third value appends', merged == '-e; -a; -i', merged)
+check('AB7 third value appends',
+      merged == app._join_feat_values(['-e', '-a', '-i']), merged)
 
 merged, added, dup = mg('-e', ['-a', '-i'], FEM)
-check('AB8 a list of new values merges in one call', merged == '-e; -a; -i', merged)
+check('AB8 a list of new values merges in one call',
+      merged == app._join_feat_values(['-e', '-a', '-i']), merged)
 
 merged, added, dup = mg('-e', '-a; -i', FEM)
-check('AB9 a "; "-joined string of new values also merges',
-      merged == '-e; -a; -i', merged)
+check('AB9 a separator-joined string of new values also merges',
+      merged == app._join_feat_values(['-e', '-a', '-i']), merged)
 
 merged, added, dup = mg('-e; -a', '-a', FEM)
 check('AB10 adding an already-present value is a no-op',
-      merged == '-e; -a' and added == [], str((merged, added)))
+      merged == app._join_feat_values(['-e', '-a']) and added == [], str((merged, added)))
 
 # The existing value must survive even when it is a ";"-containing option
 merged, added, dup = mg('-a; -ha only after -ū-', '-ha', TRICKY)
 check('AB11 ";"-containing existing value is preserved on merge',
-      merged == '-a; -ha only after -ū-; -ha', merged)
+      merged == app._join_feat_values(['-a; -ha only after -ū-', '-ha']), merged)
 
 check('AB12 merging never removes anything',
       all(v in mg('-e; -a; -i', '-x', FEM)[0] for v in ['-e', '-a', '-i']))
 check('AB13 empty new value is ignored',
       mg('-e', '', FEM)[0] == '-e', mg('-e', '', FEM)[0])
-check('AB14 join helper uses "; "', app._join_feat_values(['a', 'b']) == 'a; b')
-check('AB15 join drops blanks', app._join_feat_values(['a', '', '  ', 'b']) == 'a; b')
+check('AB14 join helper uses the configured separator',
+      app._join_feat_values(['a', 'b']) == 'a' + app.FEAT_VALUE_SEP + 'b',
+      app._join_feat_values(['a', 'b']))
+check('AB14b write separator is comma (native multi-select format)',
+      app.FEAT_VALUE_SEP.strip() == ',', repr(app.FEAT_VALUE_SEP))
+check('AB15 join drops blanks',
+      app._join_feat_values(['a', '', '  ', 'b']) == 'a' + app.FEAT_VALUE_SEP + 'b')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -694,6 +701,72 @@ check('AD14 every call site passes sheet_row',
       source.count('sheet_row=(') >= 3, str(source.count('sheet_row=(')))
 check('AD15 reading current values can never break rendering',
       re.search(r'except Exception:\s*\n\s*_current_map = \{\}', source) is not None)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AE. Native multi-select format (Google Sheets chips)')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Real values from the SYN. Continuous Mod. column
+SYN = ['Q-ʿ-D', 'B-Q-Y', 'K-W-N']
+
+check('AE1 write separator is comma (native chip format)',
+      app.FEAT_VALUE_SEP.strip() == ',', repr(app.FEAT_VALUE_SEP))
+check('AE2 native ", " cell parses into chips',
+      sp('Q-ʿ-D, B-Q-Y', SYN) == ['Q-ʿ-D', 'B-Q-Y'], str(sp('Q-ʿ-D, B-Q-Y', SYN)))
+check('AE3 native cell without a space after the comma parses too',
+      sp('Q-ʿ-D,B-Q-Y', SYN) == ['Q-ʿ-D', 'B-Q-Y'], str(sp('Q-ʿ-D,B-Q-Y', SYN)))
+check('AE4 legacy ";" cells still parse (not yet migrated columns)',
+      sp('Q-ʿ-D; B-Q-Y', SYN) == ['Q-ʿ-D', 'B-Q-Y'], str(sp('Q-ʿ-D; B-Q-Y', SYN)))
+check('AE5 a merge writes the native comma format',
+      mg('Q-ʿ-D', 'B-Q-Y', SYN)[0] == 'Q-ʿ-D, B-Q-Y', mg('Q-ʿ-D', 'B-Q-Y', SYN)[0])
+check('AE6 search finds a chip cell by either chip',
+      fm('Q-ʿ-D, B-Q-Y', 'Q-ʿ-D', SYN) and fm('Q-ʿ-D, B-Q-Y', 'B-Q-Y', SYN))
+check('AE7 search rejects a chip that is not on the cell',
+      fm('Q-ʿ-D, B-Q-Y', 'K-W-N', SYN) is False)
+# No current option value contains a comma — that is what makes comma-splitting
+# safe. If one is ever added, this test fires before it can corrupt parsing.
+_comma_opts = [o for t in app.FEATURE_HEADER_DEFS for o in (t[3] or []) if ',' in o]
+check('AE8 no option value contains a comma (keeps comma-splitting safe)',
+      not _comma_opts, str(_comma_opts))
+# The ';'-containing options must STILL survive now that ',' is the writer
+check('AE9 ";"-containing option still parses whole under comma separator',
+      sp('-a; -ha only after -ū-', TRICKY) == ['-a; -ha only after -ū-'],
+      str(sp('-a; -ha only after -ū-', TRICKY)))
+check('AE10 ";"-containing option merged with another writes comma-separated',
+      mg('-a; -ha only after -ū-', '-ha', TRICKY)[0]
+      == '-a; -ha only after -ū-, -ha',
+      mg('-a; -ha only after -ū-', '-ha', TRICKY)[0])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AF. Chips in the UI')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('AF1 val-chip CSS class defined',       '.val-chip {' in source)
+check('AF2 empty-state chip variant defined', '.val-chip.is-empty' in source)
+check('AF3 Feature Browse value picker is a multiselect, not a selectbox',
+      'st.multiselect(\n                        f"Value — {_sf}"' in source
+      or re.search(r'st\.multiselect\(\s*\n\s*f"Value — \{_sf\}"', source) is not None)
+check('AF4 the old single-value selectbox is gone',
+      re.search(r'st\.selectbox\(\s*\n\s*f"Value — \{_sf\}"', source) is None)
+check('AF5 several wanted values are OR-ed per feature',
+      '_wanted = _fv if isinstance(_fv, (list, tuple)) else [_fv]' in source)
+check('AF6 the stats bar renders wanted values as chips',
+      'class="val-chip">{v}</span>' in source)
+check('AF7 result rows render tagged values as chips',
+      '_chip_rows' in source and 'val-chip">{p}</span>' in source)
+check('AF8 an untagged feature shows an explicit empty chip',
+      'val-chip is-empty">not tagged' in source)
+check('AF9 the collapsed label splits multi-values with " / "',
+      "' / '.join(_parts)" in source)
+check('AF10 condition description handles a list of values',
+      '_fmt_cond' in source)
+check('AF11 picking no value adds no condition (feature is skipped)',
+      'if _vals:\n                        _feat_conditions.append' in source)
+check('AF12 "not tagged" is still selectable alongside real values',
+      '[FEAT_NONE_OPTION] + (_fd[4] or [])' in source)
+check('AF13 FEAT_NONE_OPTION is handled inside the any() test',
+      '_is_empty if _w == FEAT_NONE_OPTION' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

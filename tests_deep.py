@@ -601,7 +601,9 @@ check('I13 FEAT_NONE_OPTION is not a real option value',
 # I14 — bool features are searched by truthiness; select features are
 # MULTI-VALUE, so the comparison must be membership, not equality.
 check('I14 select comparison uses membership (_feat_value_matches)',
-      '_feat_value_matches(_cur, _fv, _fd[4])' in source)
+      '_feat_value_matches(_cur, _w, _fd[4])' in source)
+check('I14c several wanted values are OR-ed together',
+      re.search(r'_hit = any\(', source) is not None)
 check('I14b the old equality comparison is gone',
       '_feat_val_norm(_cur) == _feat_val_norm(_fv)' not in source)
 
