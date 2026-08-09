@@ -103,6 +103,30 @@ div[data-testid="stTextInput"] input:focus {
   background: white !important;
 }
 
+/* ── Active-filter banner (shown when filters are set) ── */
+.filter-banner {
+  background: #e3f2fd; border: 1.5px solid #90caf9; border-radius: 10px;
+  padding: 7px 14px; margin: 2px 0 8px;
+  font-family: 'IBM Plex Mono', monospace; font-size: .86rem;
+  color: #0d3f75; line-height: 1.5;
+}
+.filter-banner b { color: #1565c0; }
+
+/* ── Collapsible "more wildcards" block inside the legend row ── */
+details.legend-more { display: inline-block; vertical-align: top; }
+details.legend-more > summary {
+  display: inline-block; cursor: pointer; list-style: none;
+  background: #eef4fb; border: 1px solid #b8deff; border-radius: 999px;
+  padding: 3px 12px; font-family: 'IBM Plex Mono', monospace;
+  font-size: .78rem; color: #0d3f75; user-select: none;
+}
+details.legend-more > summary::-webkit-details-marker { display: none; }
+details.legend-more > summary:hover { background: #daeeff; }
+details.legend-more[open] > summary { background: #daeeff; }
+details.legend-more .legend-more-body {
+  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px;
+}
+
 /* ── Advanced options expander ── */
 div[data-testid="stExpander"] > details {
   background: var(--sky-100) !important;
@@ -3446,28 +3470,41 @@ with mid:
     if search_mode == 'transcription':
         st.markdown("""
         <div class="legend-row">
+          <!-- Core set: the four wildcards that cover most searches. The rest
+               live behind the <details> toggle below so the search bar isn't
+               buried under a wall of pills on first load. <details> is native
+               HTML, so opening it costs no Streamlit rerun. -->
           <span class="legend-pill"><b>C</b> = consonant</span>
           <span class="legend-pill"><b>V</b> = vowel (long or short)</span>
-          <span class="legend-pill"><b>v</b> = short vowel (a e i o u ə)</span>
-          <span class="legend-pill"><b>v̄</b> = long vowel (ā ē ī ō ū ā̈)</span>
-          <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
-          <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
-          <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
-          <span class="legend-pill"><b>B</b> = Bilabial (b ḅ m ṃ f)</span>
-          <span class="legend-pill"><b>L</b> = Laminal (l ḷ m ṃ r ṛ n)</span>
           <span class="legend-pill"><b>$</b> = any characters (0 or more)</span>
           <span class="legend-pill" style="background:#e3f2fd;border-color:#90caf9;color:#1565c0">
             <b>^</b> = start of word&nbsp;&nbsp;<b>#</b> = end of word
           </span>
-          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
-            <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
-          </span>
-          <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
-            <b>(x,y,)</b> = letter optional (may be absent) &nbsp;e.g.&nbsp;<b>(q,k,)tb</b> → qtb / ktb / tb
-          </span>
           <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
-            e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>&nbsp;·&nbsp;<b>(q,ʾ)CV</b>
+            e.g.&nbsp;<b>^aCC</b>&nbsp;·&nbsp;<b>f$m</b>&nbsp;·&nbsp;<b>VCC#</b>
           </span>
+
+          <details class="legend-more">
+            <summary>▸ more wildcards &amp; groups</summary>
+            <div class="legend-more-body">
+              <span class="legend-pill"><b>v</b> = short vowel (a e i o u ə)</span>
+              <span class="legend-pill"><b>v̄</b> = long vowel (ā ē ī ō ū ā̈)</span>
+              <span class="legend-pill"><b>D</b> = diphthong (aw/ay)</span>
+              <span class="legend-pill"><b>G</b> = guttural (h x ḥ ʿ ġ q)</span>
+              <span class="legend-pill"><b>E</b> = emphatic (ḍ ẓ ṣ ḏ̣)</span>
+              <span class="legend-pill"><b>B</b> = Bilabial (b ḅ m ṃ f)</span>
+              <span class="legend-pill"><b>L</b> = Laminal (l ḷ m ṃ r ṛ n)</span>
+              <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+                <b>(x,y,z)</b> = one of these alternatives &nbsp;e.g.&nbsp;<b>(q,ʾ)tv</b>
+              </span>
+              <span class="legend-pill" style="background:#f3e5f5;border-color:#ce93d8;color:#6a1b9a">
+                <b>(x,y,)</b> = letter optional (may be absent) &nbsp;e.g.&nbsp;<b>(q,k,)tb</b> → qtb / ktb / tb
+              </span>
+              <span class="legend-pill" style="background:#fff8e0;border-color:#ffe082">
+                space = word boundary &nbsp;e.g.&nbsp;<b>g# ^G</b>
+              </span>
+            </div>
+          </details>
         </div>
         """, unsafe_allow_html=True)
 
@@ -3594,13 +3631,17 @@ with mid:
                 st.session_state.pop('_feat_search', None)
                 st.session_state['_search_results'] = []
 
-        if _feat_search_btn and _feat_conditions:
+        # The main Search button (in the search-bar component) fires a feature
+        # search too, so "Search" means the same thing in every mode. The
+        # dedicated button above remains as the in-context primary action.
+        if (_feat_search_btn or search_clicked) and _feat_conditions:
             st.session_state['_feat_search'] = (_feat_conditions, _logic)
             st.session_state['_search_results'] = []
-
-        # If user hit the main Search button while in Feature Browse mode, show a hint.
-        if search_clicked:
-            st.info("In Feature Browse mode, use the **🏷️ Find tagged documents** button above to search.", icon="ℹ️")
+        elif search_clicked and not _feat_conditions:
+            st.info(
+                "Choose at least one feature above, then press Search.",
+                icon="🏷️",
+            )
 
         search_clicked = False
         pattern_input  = ''
@@ -3627,7 +3668,54 @@ with mid:
     def _corpus_vals(key):
         return sorted({d[key] for d in corpus if d.get(key)})
 
-    with st.expander("⚙️  Advanced options"):
+    # ── Active-filter indicator ───────────────────────────────────────────────
+    # The expander's label is evaluated BEFORE the multiselects inside it run,
+    # so the current selections are read from session_state (which holds the
+    # values from the previous rerun — i.e. what is actually in effect right
+    # now). Without this, filters set earlier stay silently active while the
+    # panel is collapsed and quietly narrow every later search.
+    _FILTER_KEYS = {
+        'filt_village':   'village',
+        'filt_geo':       'geography',
+        'filt_social':    'social type',
+        'filt_community': 'community',
+        'filt_gender':    'gender',
+        'filt_status':    'status',
+    }
+    _active_now = {
+        _label: st.session_state.get(_k, [])
+        for _k, _label in _FILTER_KEYS.items()
+        if st.session_state.get(_k)
+    }
+    _n_active = len(_active_now)
+
+    if _n_active:
+        _summary = ', '.join(
+            f"{_lbl} ({len(_vals)})" if len(_vals) > 1 else f"{_lbl}: {_vals[0]}"
+            for _lbl, _vals in _active_now.items()
+        )
+        _exp_label = f"⚙️  Advanced options   ·   🔵 {_n_active} filter{'s' if _n_active != 1 else ''} active"
+    else:
+        _summary   = ''
+        _exp_label = "⚙️  Advanced options"
+
+    # Show the active filters OUTSIDE the expander too, so they stay visible
+    # even when the panel is collapsed.
+    if _n_active:
+        _fb1, _fb2 = st.columns([5, 1])
+        with _fb1:
+            st.markdown(
+                f'<div class="filter-banner">🔵 <b>Filters active:</b> {_summary}</div>',
+                unsafe_allow_html=True,
+            )
+        with _fb2:
+            if st.button("✕ Clear", key="clear_all_filters",
+                         help="Remove all document filters"):
+                for _k in _FILTER_KEYS:
+                    st.session_state[_k] = []
+                st.rerun()
+
+    with st.expander(_exp_label):
         if search_mode == 'transcription':
             st.markdown("**Pattern position within word**")
             position = st.radio(
@@ -3828,14 +3916,51 @@ if search_clicked and pattern_input.strip() and corpus:
     st.session_state['_searching'] = True
     st.session_state['_search_start_ts'] = time.time()
     try:
+        # Funnel counts for the empty-state diagnosis below: how many documents
+        # existed, and how many survived the filters. Without this, a zero-result
+        # search looks the same whether the pattern was wrong or the filters had
+        # already excluded every document — the single most common confusion.
+        _n_corpus_total = len({d['doc_id'] for d in corpus})
+        _n_after_filter = len({d['doc_id'] for d in _apply_filters(corpus, active_filters)})
+
+        def _explain_empty(what: str) -> None:
+            """Show where the funnel collapsed, and the most likely fix."""
+            st.info(f'No results found for {what}.', icon="🔍")
+            _stages = (
+                f"**{_n_corpus_total}** documents in corpus &nbsp;→&nbsp; "
+                f"**{_n_after_filter}** after filters &nbsp;→&nbsp; "
+                f"**0** matched the pattern"
+            )
+            st.markdown(
+                f'<div class="filter-banner" style="background:#fff8e0;border-color:#ffe082;color:#7a5f00">'
+                f'{_stages}</div>',
+                unsafe_allow_html=True,
+            )
+            if _n_after_filter == 0 and _n_corpus_total > 0:
+                st.caption(
+                    "⚠️ Your filters excluded every document — the pattern was never tested. "
+                    "Clear the filters and search again."
+                )
+            elif _n_after_filter < _n_corpus_total:
+                st.caption(
+                    f"ℹ️ Filters are limiting this search to {_n_after_filter} of "
+                    f"{_n_corpus_total} documents. Widen or clear them to search the whole corpus."
+                )
+            else:
+                st.caption(
+                    "ℹ️ The whole corpus was searched, so this is the pattern, not the filters. "
+                    "Try removing an anchor (^ or #), using $ between letters, or a broader "
+                    "wildcard class."
+                )
+
         if search_mode == 'document':
             results = search_by_name(_effective_pattern, _apply_filters(corpus, active_filters))
             if not results:
-                st.info(f'No documents found matching "{_effective_pattern}".', icon="🔍")
+                _explain_empty(f'"{_effective_pattern}"')
         else:
             results = run_search(_effective_pattern, position, name_filter, corpus, active_filters)
             if not results:
-                st.info(f'No results found for **{_effective_pattern}**. Try a broader pattern or different filters.', icon="🔍")
+                _explain_empty(f'**{_effective_pattern}**')
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
@@ -4267,6 +4392,31 @@ if st.session_state.get('_feat_search') and corpus:
     if not _feat_rows:
         _desc = f" {_logic} ".join(f"{n}={'✓' if d[3]=='bool' else v}" for n,d,v in _feat_conditions)
         st.info(f"No documents found matching: {_desc}")
+
+        # Same funnel diagnosis as transcription search: show whether the
+        # filters or the feature conditions are what produced zero rows.
+        _fb_total    = len({d['doc_id'] for d in corpus})
+        _fb_filtered = len(_seen_fids)
+        st.markdown(
+            '<div class="filter-banner" '
+            'style="background:#fff8e0;border-color:#ffe082;color:#7a5f00">'
+            f'<b>{_fb_total}</b> documents in corpus &nbsp;→&nbsp; '
+            f'<b>{_fb_filtered}</b> after filters &nbsp;→&nbsp; '
+            '<b>0</b> matched the feature conditions'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        if _fb_filtered == 0 and _fb_total > 0:
+            st.caption(
+                "⚠️ Your filters excluded every document — the feature conditions were "
+                "never tested. Clear the filters and search again."
+            )
+        elif _logic == 'AND' and len(_feat_conditions) > 1:
+            st.caption(
+                "ℹ️ Using **AND** — a document must have *all* the selected features. "
+                "Switch to **OR** to find documents with at least one."
+            )
+
         # Diagnostic: show what's actually in the spreadsheet for each
         # select-type column searched, so a value typed/stored differently
         # than the dropdown option (typo, extra spaces, different spelling)
@@ -4276,6 +4426,11 @@ if st.session_state.get('_feat_search') and corpus:
                 st.caption(
                     f"ℹ️ Values actually found in the **{_fn}** column for the "
                     f"documents searched: {', '.join(sorted(_vals_seen))}"
+                )
+            else:
+                st.caption(
+                    f"ℹ️ The **{_fn}** column is empty for every document searched — "
+                    f"nothing has been tagged with this feature yet."
                 )
     else:
         st.caption(f"{len(_feat_rows)} document(s) found")

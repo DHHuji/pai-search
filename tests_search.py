@@ -456,6 +456,93 @@ check('Y4 get_extra_feature_defs returns [] when the tab is missing',
       'return []   # tab doesn' in source or 'return []' in source)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('Z. UX changes — active filters, legend, unified search, empty state')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Z1 — active-filter indicator
+check('Z1 filter keys are enumerated for the indicator',
+      '_FILTER_KEYS' in source)
+check('Z2 active filters are read from session_state (pre-widget)',
+      re.search(r'_active_now\s*=', source) is not None)
+check('Z3 expander label carries the active-filter count',
+      'filter{' in source and 'active' in source)
+check('Z4 a filter banner renders outside the expander',
+      'filter-banner' in source)
+check('Z5 .filter-banner CSS class is defined',
+      '.filter-banner {' in source)
+check('Z6 a Clear-all-filters button exists',
+      'clear_all_filters' in source)
+check('Z7 Clear resets every filter key, then reruns',
+      re.search(r'for _k in _FILTER_KEYS:\s*\n\s*st\.session_state\[_k\] = \[\]', source)
+      is not None)
+# every key in _FILTER_KEYS must be a real multiselect key used in the UI
+_fk = re.search(r'_FILTER_KEYS\s*=\s*\{(.*?)\}', source, re.S)
+_keys = re.findall(r"'(filt_\w+)'", _fk.group(1)) if _fk else []
+check('Z8 all six document filters are covered by the indicator',
+      len(_keys) == 6, str(_keys))
+_missing = [k for k in _keys if f'key="{k}"' not in source]
+check('Z9 every indicator key matches a real multiselect widget',
+      not _missing, str(_missing))
+
+# Z10 — legend collapse
+check('Z10 legend uses a native <details> block (no Streamlit rerun)',
+      'details class="legend-more"' in source)
+check('Z11 legend-more CSS is defined',
+      'details.legend-more' in source)
+# Compare positions WITHIN the legend HTML only — 'legend-more' also appears
+# far earlier in the CSS block, which would make a whole-file index() meaningless.
+_legend = source[source.index('<div class="legend-row">'):]
+_legend = _legend[:_legend.index('</div>\n        """')]
+_open   = _legend.index('<details class="legend-more">')
+check('Z12 core wildcards stay outside the collapsed block',
+      _legend.index('<b>C</b> = consonant') < _open
+      and _legend.index('<b>V</b> = vowel') < _open
+      and _legend.index('<b>$</b> =') < _open)
+check('Z13 rarer wildcards moved inside the collapsed block',
+      _open < _legend.index('<b>B</b> = Bilabial')
+      and _open < _legend.index('<b>L</b> = Laminal')
+      and _open < _legend.index('<b>E</b> = emphatic'))
+check('Z13b the collapsed block is closed properly',
+      _legend.count('<details class="legend-more">') == 1
+      and _legend.count('</details>') == 1)
+check('Z13c the collapsed block has a summary label',
+      '<summary>' in _legend and '</summary>' in _legend)
+# Every wildcard must still be documented somewhere in the legend
+for _ch in ['C', 'V', 'v', 'D', 'G', 'E', 'B', 'L']:
+    check(f'Z14 wildcard {_ch} still documented in the legend',
+          re.search(rf'<b>{re.escape(_ch)}</b>\s*=', source) is not None)
+
+# Z15 — unified Search button
+check('Z15 the main Search button also fires a feature search',
+      '_feat_search_btn or search_clicked' in source)
+check('Z16 the old "use the other button" apology is gone',
+      'use the **🏷️ Find tagged documents** button' not in source)
+check('Z17 pressing Search with no feature selected gives guidance',
+      'Choose at least one feature above' in source)
+
+# Z18 — empty-state funnel diagnosis
+check('Z18 transcription empty state has a funnel explainer',
+      '_explain_empty' in source)
+check('Z19 funnel counts corpus size and post-filter size',
+      '_n_corpus_total' in source and '_n_after_filter' in source)
+check('Z20 funnel counts are de-duplicated by doc_id',
+      re.search(r"_n_corpus_total\s*=\s*len\(\{d\['doc_id'\]", source) is not None)
+check('Z21 zero-after-filter case is called out explicitly',
+      'filters excluded every document' in source)
+check('Z22 whole-corpus case points at the pattern, not the filters',
+      'this is the pattern, not the filters' in source)
+check('Z23 both document and transcription modes use the explainer',
+      source.count('_explain_empty(') >= 3)
+check('Z24 feature browse also shows the funnel',
+      'matched the feature conditions' in source)
+check('Z25 AND/OR hint shown when an AND search returns nothing',
+      'Switch to **OR**' in source)
+check('Z26 an entirely untagged feature column is called out',
+      'nothing has been tagged with this feature yet' in source)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')
 if failures:
