@@ -70,11 +70,12 @@ FEAT_PREFIXES = ('PHON.', 'MOR.', 'SYN.', 'LEX.')
 ('LEX. "when?"',    '"when?"',      'select', ['ēmta', 'wēnta'])
 ```
 
-**כדי להוסיף feature column עם type/options ידועים**, הוסף שורה כאן.  
-**כדי להוסיף feature column זמני** (ללא שינוי קוד), השתמש ב-"➕ Add a feature column" בסרגל הצד.
+**כדי להוסיף feature column חדש** — פשוט תן לעמודה בגיליון כותרת שמתחילה ב-PHON. / MOR. / SYN. / LEX. והגדר לה dropdown. היא תתגלה אוטומטית תוך ~2 דקות. הוסף שורה כאן רק כדי לקבע type/options בקוד.
 
 ### `AppFeatureDefs` tab בגיליון
-feature columns שנוספו דרך הממשק נשמרים כאן. מבנה: `header_text | display_name | type | options (;-separated)`.
+מבנה: `header_text | display_name | type | options (;-separated)`.
+
+⚠️ **הממשק שכתב לטאב הזה הוסר** (הפאנל "🧬 Feature columns" בסרגל הצד) — גילוי לפי prefix הפך אותו למיותר. הטאב עדיין **נקרא** ע"י `get_extra_feature_defs()`, כך שרשומות היסטוריות ממשיכות לספק type/options. אם צריך לערוך אותו — עורכים ידנית בגיליון.
 
 ### פונקציות מרכזיות לניהול features
 
@@ -251,7 +252,7 @@ Features שמופיעים בdoc FEATURES section אבל **אין להם עמוד
 שלושה קבצים, כולם בתיקיית הפרויקט. הרץ את שלושתם אחרי כל שינוי:
 
 ```bash
-python tests_full.py     # 85 טסטים — רגרסיה כללית
+python tests_full.py     # 98 טסטים — רגרסיה כללית
 python tests_deep.py     # 85 טסטים — feature-columns, cache, wildcards
 python tests_search.py   # 313 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value, chips, קיבוץ, CSV
 ```
@@ -475,6 +476,26 @@ _csv_feature_cells(sheet_row, doc_id)   # התאים בסדר תואם
 ```
 
 ⚠️ **שלושת כותבי ה-CSV** (תוצאות חיפוש, תוצאות מסומנות, feature browse) שיכפלו בעבר את הלוגיקה inline — ולכן התיקון היה צריך להיעשות בשלושה מקומות. כולם עוברים עכשיו דרך שתי הפונקציות האלה. **אל תשכפל שוב.** טסט AI27 נכשל אם מופיע `'TRUE' if` יותר מפעם אחת בקובץ.
+
+---
+
+## מה הוסר (2026-08-08)
+
+הפאנל **"🧬 Feature columns"** בסרגל הצד הוסר יחד עם הקוד שמאחוריו:
+
+- `➕ Add a feature column` — מיותר מאז גילוי לפי prefix
+- `🔧 Debug: inspect corpus row`
+- `add_app_feature_def` / `remove_app_feature_def` / `_ensure_app_features_sheet`
+- `get_unclaimed_headers` / `get_unresolved_features` / `debug_corpus_load`
+
+`app.py` ירד מ-5109 ל-4748 שורות. הכל שחזיר מ-git history במידת הצורך.
+
+**נשמר בכוונה:**
+
+- `get_extra_feature_defs()` — הטאב עדיין נקרא
+- `↺ Clear cache & reload` ו-`🔄 Reload corpus cache` — יושבים באותו סרגל אבל לא קשורים
+
+⚠️ **לקח מהמחיקה הזו**: הבלוק ברמת המודול `FEATURE_DEFS = get_feature_defs()` ישב מיד אחרי `get_unclaimed_headers`, ומחיקה אוטומטית של הפונקציה בלעה גם אותו. הבדיקות תפסו את זה מיד. אם מוחקים פונקציה — **לוודא שלא נבלע איתה קוד ברמת המודול שיושב אחריה**. סקשן 3-4 ב-`tests_full.py` אוכף עכשיו גם שהמחיקה הושלמה וגם שהחלקים שהיו חייבים לשרוד אותה עדיין קיימים.
 
 ---
 
