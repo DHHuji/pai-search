@@ -2504,10 +2504,21 @@ def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
     Flat [value, example, value, example, ...] in FEATURE_DEFS order, matching
     _csv_feature_header().
 
-    An untagged bool feature exports as an EMPTY cell, never 'FALSE'. Blank
-    means "not assessed" while FALSE means "assessed and found absent"; writing
-    FALSE for an untouched cell would silently invent negative data across the
-    whole corpus.
+    A bool feature exports 'TRUE' or an EMPTY cell — never 'FALSE'.
+
+    The bool columns in this sheet are Google Sheets CHECKBOXES, and an
+    unchecked checkbox stores a literal FALSE in the cell. It is therefore
+    the column's default state, not a researcher's judgement: as of the
+    2026-08-09 corpus, 33 of the 36 checkbox columns held FALSE in all 778
+    rows with no TRUE at all, and the other three held exactly one TRUE each.
+    Not a single cell was blank.
+
+    A checkbox has no third state, so "assessed and found absent" cannot be
+    expressed in these columns at all — only a tick carries information.
+    Exporting FALSE would therefore fill the CSV with tens of thousands of
+    meaningless negatives that read as real findings. If a genuine
+    three-state feature is ever needed, give it a select column with an
+    explicit "no" option rather than a checkbox.
     """
     vals: dict = {}
     if sheet_row:
@@ -2531,7 +2542,9 @@ def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
     for fd in FEATURE_DEFS:
         v = vals.get(fd[1])
         if fd[3] == 'bool':
-            cell = '' if v is None else ('TRUE' if v else 'FALSE')
+            # Only a ticked checkbox is meaningful; unticked (False) and
+            # never-touched (None) are indistinguishable, so both export blank.
+            cell = 'TRUE' if v else ''
         else:
             cell = v if v not in (None, '', False) else ''
         out.append(cell)

@@ -918,7 +918,7 @@ try:
     check('AI8 cells line up with the header',
           len(cells) == len(hdr), f'{len(cells)} vs {len(hdr)}')
     _c = dict(zip(hdr, cells))
-    check('AI9 a tagged bool exports TRUE',
+    check('AI9 a ticked bool exports TRUE',
           _c['PHON. Diphthongs'] == 'TRUE', repr(_c['PHON. Diphthongs']))
     # THE reported bug: an untouched bool used to export as FALSE
     check('AI10 an UNTAGGED bool exports BLANK, not FALSE',
@@ -933,15 +933,21 @@ try:
     check('AI14 example words survive multi-word tags',
           _c['LEX. "want" — example'] == 'biddi ašrab')
 
-    # An explicit False must STILL export FALSE — blank and False differ.
+    # An UNTICKED checkbox (literal False in the sheet) must ALSO export blank.
+    # These columns are Google Sheets checkboxes: False is the default state,
+    # not a judgement, and a checkbox has no third state to distinguish them.
+    # Exporting FALSE filled the CSV with meaningless negatives — 33 of the 36
+    # checkbox columns were FALSE in all 778 corpus rows with no TRUE at all.
     with mock.patch.object(app, 'get_sheet_features',
                            return_value={'A': False, 'B': None, 'C': None, 'D': None}), \
          mock.patch.object(app, 'get_doc_content', return_value={'display_html': ''}):
         _c2 = dict(zip(hdr, app._csv_feature_cells(7, 'd1')))
-    check('AI15 an explicitly-false bool still exports FALSE',
-          _c2['PHON. Diphthongs'] == 'FALSE', repr(_c2['PHON. Diphthongs']))
-    check('AI16 blank and FALSE remain distinguishable',
-          _c2['PHON. Diphthongs'] == 'FALSE' and _c2['PHON. Med. Imāla'] == '')
+    check('AI15 an unticked checkbox (False) exports BLANK, not FALSE',
+          _c2['PHON. Diphthongs'] == '', repr(_c2['PHON. Diphthongs']))
+    check('AI16 both False and None export the same blank cell',
+          _c2['PHON. Diphthongs'] == '' and _c2['PHON. Med. Imāla'] == '')
+    check('AI16b the string FALSE never reaches a CSV cell',
+          'FALSE' not in [_c2[h] for h in hdr])
 
     # ── robustness ──
     with mock.patch.object(app, 'get_sheet_features', side_effect=RuntimeError('boom')), \
@@ -979,8 +985,15 @@ check('AI25 main results CSV uses the shared header',
       source.count('_csv_feature_header()') >= 2, str(source.count('_csv_feature_header()')))
 check('AI26 all three CSV writers use the shared cell builder',
       source.count('_csv_feature_cells(') >= 4, str(source.count('_csv_feature_cells(')))
-check('AI27 no CSV writer emits FALSE for an untagged cell any more',
+check('AI27 exactly one place decides bool export',
       source.count("'TRUE' if") == 1, str(source.count("'TRUE' if")))
+# Assert on the CODE, not the prose — the docstring legitimately mentions
+# FALSE while explaining why it is never exported.
+check('AI27b no code path assigns the literal string FALSE',
+      "else 'FALSE'" not in source and '"FALSE"' not in source.replace(
+          "'+', '-', 'true', 'false', 'yes', 'no', 'TRUE', 'FALSE', '1', '0',", ''))
+check('AI27c bool export is a plain TRUE-or-blank',
+      "cell = 'TRUE' if v else ''" in source)
 check('AI28 example lookup is cached',
       '@st.cache_data(ttl=3600, show_spinner=False)\ndef get_doc_feature_examples' in source)
 check('AI29 example cache is keyed by column set (survives a rename)',
