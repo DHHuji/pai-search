@@ -1154,6 +1154,87 @@ check('AJ34 exceptions are shown as chips in the results',
       'val-chip is-but' in source)
 check('AJ35 BUT chips have their own style',     '.val-chip.is-but' in source)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AK. Deleting tags — per value, and no silent disappearance')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_FD_FE = (3, 'C', 'MOR. Fem. Ending', 'select', ['-i', '-e', '-a'])
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = [_FD_FE]
+_w = {}
+def _svc():
+    _s = mock.MagicMock()
+    def _bu(spreadsheetId=None, body=None, **k):
+        for d in body['data']:
+            _w[d['range']] = d['values'][0][0]
+        return mock.MagicMock(execute=lambda: {})
+    _s.spreadsheets.return_value.values.return_value.batchUpdate = _bu
+    return (None, None, _s)
+
+def _del(cell, only):
+    _w.clear()
+    with mock.patch.object(app, 'get_services', side_effect=_svc), \
+         mock.patch.object(app, 'get_sheet_features', return_value={'C': cell}), \
+         mock.patch.object(app, 'update_gdoc_features_section') as _ug:
+        app.delete_feature_tag('d', [7], 'C', only)
+    return _w.get('Recordings!C7'), _ug
+
+try:
+    check('AK1 removing one value keeps the others',
+          _del('-e, -a', '-a')[0] == '-e', str(_del('-e, -a', '-a')[0]))
+    check('AK2 removing the other value keeps the first',
+          _del('-e, -a', '-e')[0] == '-a')
+    check('AK3 removing from three keeps two',
+          _del('-e, -a, -i', '-a')[0] == '-e, -i', str(_del('-e, -a, -i', '-a')[0]))
+    check('AK4 only_value=None still clears the whole cell',
+          _del('-e, -a', None)[0] == '')
+    check('AK5 removing the last value clears the cell',
+          _del('-e', '-e')[0] == '')
+    check('AK6 removing a value that is not there changes nothing',
+          _del('-e, -a', '-i')[0] == '-e, -a')
+    check('AK7 removal is case/space insensitive',
+          _del('-e, -a', '  -A  ')[0] == '-e', str(_del('-e, -a', '  -A  ')[0]))
+
+    # the doc must be rewritten with what REMAINS, not blanked
+    _cell, _ug = _del('-e, -a', '-a')
+    check('AK8 the doc is rewritten with the remaining value',
+          _ug.call_args[0][1] == {'C': '-e'}, str(_ug.call_args))
+    _cell, _ug = _del('-e', '-e')
+    check('AK9 the doc line is removed when nothing remains',
+          _ug.call_args[0][1] == {'C': None}, str(_ug.call_args))
+finally:
+    app.FEATURE_DEFS = _saved
+
+# ── signature / wiring ──
+check('AK10 delete_feature_tag takes an only_value',
+      'only_value: str | None = None' in source)
+check('AK11 the cell is rebuilt from the kept values, not blanked',
+      '_kept = [v for v in _split_feat_values' in source)
+check('AK12 the doc write follows the remaining values',
+      "update_gdoc_features_section(doc_id, {col_letter: _new_cell or None})" in source)
+
+# ── UI ──
+check('AK13 each value gets its own remove button',
+      'key=f"del_{sk}_{_fd[1]}_{_vi}"' in source)
+check('AK14 a "remove all" button appears only for multi-value features',
+      'if len(_vals) > 1:' in source and '_all"' in source)
+check('AK15 pending_delete carries (column, value)',
+      '(_fd[1], _one)' in source and '(_fd[1], None)' in source)
+check('AK16 an older bare-string pending_delete is tolerated',
+      'if isinstance(_pending_del, str):' in source)
+check('AK17 the confirmation says what will remain',
+      'The document stays tagged' in source)
+check('AK18 the confirmation calls out the last-value case',
+      'It is the last remaining value' in source)
+
+# ── the disappearing panel ──
+check('AK19 a failed read is tracked separately from "no tags"',
+      '_read_failed' in source)
+check('AK20 a failed read tells the user instead of hiding the panel',
+      'Could not read the current tags from the spreadsheet' in source)
+check('AK21 the notice makes clear existing tags are unaffected',
+      'your existing tags are unaffected' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

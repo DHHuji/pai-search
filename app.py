@@ -2848,17 +2848,36 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
     return notices
 
 
-def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
+def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str,
+                       only_value: str | None = None):
     """
-    Delete a single feature tag:
-      1. Clears the spreadsheet cell(s) for this doc's row(s).
-      2. Rewrites the Google Doc FEATURES section with the cleared value.
+    Remove a feature tag.
+
+    only_value=None  → clear the whole cell (every value the feature holds).
+    only_value="-a"  → remove JUST that value, leaving the others in place.
+
+    The second form exists because select features are multi-value: a document
+    tagged "-e, -a" by two different researchers should not lose both tags
+    because one of them was wrong. Removing the last remaining value clears the
+    cell, which then also drops the line from the Google Doc.
     """
     _, _, sheets_svc = get_services()
 
-    # 1. Clear the cell in every sheet row that belongs to this doc
+    # Work out what the cell should end up containing
+    _new_cell = ''
+    if only_value is not None and sheet_rows:
+        fd = next((f for f in FEATURE_DEFS if f[1] == col_letter), None)
+        try:
+            _cur = get_sheet_features(sheet_rows[0]).get(col_letter)
+        except Exception:
+            _cur = None
+        _kept = [v for v in _split_feat_values(_cur, fd[4] if fd else None)
+                 if _feat_val_norm(v) != _feat_val_norm(only_value)]
+        _new_cell = _join_feat_values(_kept)
+
+    # 1. Write the remaining values (or blank) into every row for this doc
     data = [
-        {'range': f"Recordings!{col_letter}{row}", 'values': [['']]}
+        {'range': f"Recordings!{col_letter}{row}", 'values': [[_new_cell]]}
         for row in (sheet_rows or [])
     ]
     if data:
@@ -2872,11 +2891,11 @@ def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
         # on it would raise AttributeError since it is not a cached function.)
         st.session_state['_features_version'] = st.session_state.get('_features_version', 0) + 1
 
-    # 2. Rewrite Google Doc FEATURES section with updated (cleared) values
+    # 2. Rewrite the Google Doc FEATURES section to match.
+    #    A remaining value rewrites the line; nothing left removes it.
     if doc_id and sheet_rows:
         try:
-            # Pass None for the deleted col → tells the function to remove that line
-            update_gdoc_features_section(doc_id, {col_letter: None})
+            update_gdoc_features_section(doc_id, {col_letter: _new_cell or None})
         except Exception:
             pass   # doc update failure is non-critical; spreadsheet already cleared
 
@@ -3480,10 +3499,21 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
 
     # ── Delete existing tags (always shown when there are tagged features) ──
     if sheet_rows:
+        # A FAILED read used to be indistinguishable from "nothing is tagged":
+        # both produced an empty dict and the whole panel silently vanished,
+        # reappearing minutes later once the fetch succeeded. Track the failure
+        # separately and say so, instead of pretending there are no tags.
+        _read_failed = False
         try:
             _existing = get_sheet_features(sheet_rows[0])
-        except Exception:
-            _existing = {}
+        except Exception as _re:
+            _existing, _read_failed = {}, True
+            st.warning(
+                "⚠️ Could not read the current tags from the spreadsheet just "
+                f"now ({_re}). The remove-tags panel is hidden until the next "
+                "successful read — your existing tags are unaffected.",
+                icon="⚠️",
+            )
         _tagged_feats = [
             (fd, _existing.get(fd[1]))
             for fd in FEATURE_DEFS
@@ -3491,33 +3521,82 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
         ]
         if _tagged_feats:
             with st.expander(f"🗑️  Remove existing tags  ({len(_tagged_feats)} tagged)"):
+                # A select feature can hold SEVERAL values, so each value gets
+                # its own remove button — removing one must not discard the
+                # others. `_pending_delete` is (col_letter, value|None); None
+                # means "clear the whole feature".
                 _pending_del = st.session_state.get(f"{sk}_pending_delete")
                 for _fd, _val in _tagged_feats:
-                    _c1, _c2 = st.columns([5, 1])
-                    _val_str = '✓' if _fd[3] == 'bool' else str(_val)
-                    _c1.markdown(f"`{_fd[2]}` = **{_val_str}**")
-                    if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}", help=f"Remove {_fd[2]}"):
-                        st.session_state[f"{sk}_pending_delete"] = _fd[1]
-                        st.rerun()
+                    if _fd[3] == 'bool':
+                        _c1, _c2 = st.columns([5, 1])
+                        _c1.markdown(f"`{_fd[2]}` = **✓**")
+                        if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}",
+                                      help=f"Remove {_fd[2]}"):
+                            st.session_state[f"{sk}_pending_delete"] = (_fd[1], None)
+                            st.rerun()
+                        continue
+
+                    _vals = _split_feat_values(_val, _fd[4]) or [str(_val)]
+                    st.markdown(f"`{_fd[2]}`")
+                    for _vi, _one in enumerate(_vals):
+                        _c1, _c2 = st.columns([5, 1])
+                        _c1.markdown(
+                            f'&nbsp;&nbsp;<span class="val-chip">{_one}</span>',
+                            unsafe_allow_html=True,
+                        )
+                        if _c2.button("🗑️", key=f"del_{sk}_{_fd[1]}_{_vi}",
+                                      help=f"Remove only “{_one}”"):
+                            st.session_state[f"{sk}_pending_delete"] = (_fd[1], _one)
+                            st.rerun()
+                    if len(_vals) > 1:
+                        _c1, _c2 = st.columns([5, 1])
+                        _c1.caption("&nbsp;&nbsp;…or remove every value")
+                        if _c2.button("🗑️ all", key=f"del_{sk}_{_fd[1]}_all",
+                                      help=f"Remove all values of {_fd[2]}"):
+                            st.session_state[f"{sk}_pending_delete"] = (_fd[1], None)
+                            st.rerun()
 
                 # Confirmation step — shown after clicking 🗑️
                 if _pending_del:
-                    _del_fd = next((f for f in FEATURE_DEFS if f[1] == _pending_del), None)
+                    # tolerate the old bare-string form left in session state
+                    if isinstance(_pending_del, str):
+                        _pending_del = (_pending_del, None)
+                    _del_col, _del_one = _pending_del
+                    _del_fd = next((f for f in FEATURE_DEFS if f[1] == _del_col), None)
                     if _del_fd:
-                        _del_val = _existing.get(_pending_del)
-                        _del_val_str = '✓' if _del_fd[3] == 'bool' else str(_del_val)
-                        st.warning(
-                            f"Delete **{_del_fd[2]}** = `{_del_val_str}`? "
-                            f"This will clear the value from the spreadsheet and remove the line from the Google Doc."
-                        )
+                        _del_val = _existing.get(_del_col)
+                        _remaining = [
+                            v for v in _split_feat_values(_del_val, _del_fd[4])
+                            if _del_one is None
+                            or _feat_val_norm(v) != _feat_val_norm(_del_one)
+                        ]
+                        if _del_one is None:
+                            _msg = (f"Delete **{_del_fd[2]}** "
+                                    f"= `{'✓' if _del_fd[3] == 'bool' else _del_val}`? "
+                                    "This clears the value from the spreadsheet and "
+                                    "removes the line from the Google Doc.")
+                        elif _remaining:
+                            _msg = (f"Remove only `{_del_one}` from **{_del_fd[2]}**? "
+                                    f"The document stays tagged "
+                                    f"`{_join_feat_values(_remaining)}`.")
+                        else:
+                            _msg = (f"Remove `{_del_one}` from **{_del_fd[2]}**? "
+                                    "It is the last remaining value, so this clears "
+                                    "the feature and removes its line from the Google Doc.")
+                        st.warning(_msg)
                         _yes_col, _no_col = st.columns(2)
                         with _yes_col:
                             if st.button("✅ Yes, delete", key=f"{sk}_del_confirm", type="primary"):
                                 with st.spinner(f"Deleting {_del_fd[2]}…"):
                                     try:
-                                        delete_feature_tag(doc_id, sheet_rows, _pending_del)
+                                        delete_feature_tag(doc_id, sheet_rows,
+                                                           _del_col, _del_one)
                                         st.session_state.pop(f"{sk}_pending_delete", None)
-                                        st.success(f"✅ Deleted **{_del_fd[2]}**")
+                                        st.success(
+                                            f"✅ Removed `{_del_one}` from **{_del_fd[2]}**"
+                                            if _del_one else
+                                            f"✅ Deleted **{_del_fd[2]}**"
+                                        )
                                         st.rerun()
                                     except Exception as _de:
                                         st.error(f"Delete failed: {_de}")
