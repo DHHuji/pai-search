@@ -253,7 +253,7 @@ Features שמופיעים בdoc FEATURES section אבל **אין להם עמוד
 ```bash
 python tests_full.py     # 85 טסטים — רגרסיה כללית
 python tests_deep.py     # 85 טסטים — feature-columns, cache, wildcards
-python tests_search.py   # 224 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value
+python tests_search.py   # 247 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value, chips
 ```
 
 `_harness.py` מכיל את ה-stubs המשותפים (Streamlit + Google APIs). `tests_search.py` מייבא ממנו; שני האחרים מכילים עותק משלהם.
@@ -287,6 +287,7 @@ python tests_search.py   # 224 טסטים — חיפוש, טקסט, מסמכים
 | X–Y | נתיבי כתיבה, טיפול בקלט שגוי |
 | Z | ארבעת שינויי ה-UX (ראה למטה) |
 | AA–AD | תיוג מרובה-ערכים: פרסור, מיזוג, התאמה בחיפוש, חיווט בקוד |
+| AE–AF | פורמט multi-select נייטיב (chips) ותצוגת chips בממשק |
 
 ---
 
@@ -347,7 +348,7 @@ python tests_search.py   # 224 טסטים — חיפוש, טקסט, מסמכים
 ### פונקציות עזר (app.py, ליד `_feat_val_norm`)
 
 ```python
-FEAT_VALUE_SEP = '; '
+FEAT_VALUE_SEP = ', '   # כתיבה: פורמט multi-select נייטיב של Sheets
 
 _split_feat_values(raw, options)   # תא → רשימת ערכים
 _join_feat_values(values)          # רשימה → מחרוזת תא
@@ -368,7 +369,11 @@ _feat_value_matches(cell, wanted, options)  # חברות, לא שוויון
 
 **הפתרון**: הפרסר מנסה קודם להתאים אופציות **שלמות ידועות, הארוכה ביותר קודם**, ורק לטקסט שהוא לא מזהה נופל לפיצול על מפריד. לכן `_split_feat_values` מקבל את רשימת האופציות — **תמיד העבר את `fd[4]`**. בלי זה, אופציות שמכילות `;` יישברו.
 
-בקריאה מתקבלים גם `;` וגם `,` (כדי שתאים שנכתבו ע"י multi-select נייטיב של Sheets ימשיכו לעבוד). בכתיבה תמיד `'; '`.
+בקריאה מתקבלים גם `,` וגם `;`. **בכתיבה תמיד `', '`** — כי עמודות הפיצ'רים עוברות ל-**multi-select נייטיב של Google Sheets**, שמאחסן ערכים מופרדים בפסיק ומציג אותם כ-chips. כתיבת `'; '` לעמודה כזו הייתה יוצרת ערך אחד לא-תקין במקום שני chips.
+
+עמודות שעדיין לא הומרו ממשיכות לעבוד — הקריאה סובלנית לשני המפרידים, ולכן אין צורך ב-backfill.
+
+⚠️ **אף ערך אופציה לא מכיל פסיק כרגע** — זה מה שהופך פיצול על פסיק לבטוח. טסט AE8 נכשל אם מישהו יוסיף ערך עם פסיק, לפני שזה יספיק לשבור פרסור.
 
 ### מה השתנה בקוד
 
@@ -376,7 +381,8 @@ _feat_value_matches(cell, wanted, options)  # חברות, לא שוויון
 |---|---|---|
 | `write_sheet_features` | conflict → מסרב לכתוב | ממזג, מחזיר notices |
 | דיאלוג ה-submit | אזהרה "overwritten" | info "tags were kept and yours added" |
-| Feature Browse | `_feat_val_norm(a) == _feat_val_norm(b)` | `_feat_value_matches` (חברות) |
+| Feature Browse | selectbox (ערך אחד) | multiselect + chips, מתאים אם יש **אחד מהם** |
+| תצוגת ערכים | טקסט רץ | chips (`.val-chip`) כמו בגיליון |
 | tagging session | בחירה שנייה דורסת ראשונה | מצטברת |
 | תפריט ימני | ללא אינדיקציה | ✓ ליד ערכים שכבר מתויגים |
 | `_infer_column_types` | `-e; -a` נחשב אופציה אחת | מפוצל לערכים בודדים |
