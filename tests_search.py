@@ -870,6 +870,124 @@ check('AH12 prefix stripping agrees with the popup implementation',
           for p in app.FEAT_PREFIXES
       ))
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AI. CSV export — example words and blank vs FALSE')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_saved_defs = app.FEATURE_DEFS
+app.FEATURE_DEFS = [
+    (1, 'A', 'PHON. Diphthongs', 'bool',   None),
+    (2, 'B', 'PHON. Med. Imāla', 'bool',   None),
+    (3, 'C', 'MOR. Fem. Ending', 'select', ['-i', '-e', '-a']),
+    (4, 'D', 'LEX. "want"',      'select', ['badd', 'bidd']),
+]
+_DOC = (
+    '<html><body><p>text</p><p>FEATURES:</p><p>PHON.</p>'
+    '<p>PHON. Diphthongs  [bayt; ʿayn]   +</p><p>MOR.</p>'
+    '<p>MOR. Fem. Ending  [madrase]   -e, -a</p><p>LEX.</p>'
+    '<p>LEX. &quot;want&quot;  [biddi ašrab]   bidd</p></body></html>'
+)
+try:
+    # ── header shape ──
+    hdr = app._csv_feature_header()
+    check('AI1 header has two columns per feature',
+          len(hdr) == 2 * len(app.FEATURE_DEFS), str(len(hdr)))
+    check('AI2 the example column sits next to its value column',
+          hdr[0] == 'PHON. Diphthongs' and hdr[1] == 'PHON. Diphthongs — example',
+          str(hdr[:2]))
+    check('AI3 every feature has an example column',
+          all(f'{fd[2]} — example' in hdr for fd in app.FEATURE_DEFS))
+
+    # ── example-word extraction from the doc ──
+    with mock.patch.object(app, 'get_doc_content', return_value={'display_html': _DOC}):
+        ex = app.get_doc_feature_examples('d1')
+    check('AI4 example words are read from the doc FEATURES block',
+          ex.get('PHON. Diphthongs') == 'bayt; ʿayn', str(ex))
+    check('AI5 example words parsed for a select feature',
+          ex.get('MOR. Fem. Ending') == 'madrase', str(ex))
+    check('AI6 HTML entities in a feature name still match',
+          ex.get('LEX. "want"') == 'biddi ašrab', str(ex))
+    check('AI7 group-header lines are skipped', 'PHON.' not in ex, str(ex))
+
+    # ── the two bugs being fixed ──
+    SHEET = {'A': True, 'B': None, 'C': '-e, -a', 'D': 'bidd'}
+    with mock.patch.object(app, 'get_sheet_features', return_value=SHEET), \
+         mock.patch.object(app, 'get_doc_content', return_value={'display_html': _DOC}):
+        cells = app._csv_feature_cells(7, 'd1')
+
+    check('AI8 cells line up with the header',
+          len(cells) == len(hdr), f'{len(cells)} vs {len(hdr)}')
+    _c = dict(zip(hdr, cells))
+    check('AI9 a tagged bool exports TRUE',
+          _c['PHON. Diphthongs'] == 'TRUE', repr(_c['PHON. Diphthongs']))
+    # THE reported bug: an untouched bool used to export as FALSE
+    check('AI10 an UNTAGGED bool exports BLANK, not FALSE',
+          _c['PHON. Med. Imāla'] == '', repr(_c['PHON. Med. Imāla']))
+    check('AI11 its example column is blank too',
+          _c['PHON. Med. Imāla — example'] == '')
+    check('AI12 a multi-value select exports both values',
+          _c['MOR. Fem. Ending'] == '-e, -a', repr(_c['MOR. Fem. Ending']))
+    check('AI13 the tagged word appears beside its feature',
+          _c['MOR. Fem. Ending — example'] == 'madrase',
+          repr(_c['MOR. Fem. Ending — example']))
+    check('AI14 example words survive multi-word tags',
+          _c['LEX. "want" — example'] == 'biddi ašrab')
+
+    # An explicit False must STILL export FALSE — blank and False differ.
+    with mock.patch.object(app, 'get_sheet_features',
+                           return_value={'A': False, 'B': None, 'C': None, 'D': None}), \
+         mock.patch.object(app, 'get_doc_content', return_value={'display_html': ''}):
+        _c2 = dict(zip(hdr, app._csv_feature_cells(7, 'd1')))
+    check('AI15 an explicitly-false bool still exports FALSE',
+          _c2['PHON. Diphthongs'] == 'FALSE', repr(_c2['PHON. Diphthongs']))
+    check('AI16 blank and FALSE remain distinguishable',
+          _c2['PHON. Diphthongs'] == 'FALSE' and _c2['PHON. Med. Imāla'] == '')
+
+    # ── robustness ──
+    with mock.patch.object(app, 'get_sheet_features', side_effect=RuntimeError('boom')), \
+         mock.patch.object(app, 'get_doc_content', side_effect=RuntimeError('boom')):
+        _c3 = app._csv_feature_cells(7, 'd1')
+    check('AI17 a sheet/doc failure yields blanks, not a crash',
+          len(_c3) == len(hdr) and set(_c3) == {''}, str(_c3))
+    check('AI18 no sheet_row yields blanks',
+          app._csv_feature_cells(None, '') == [''] * len(hdr))
+    with mock.patch.object(app, 'get_doc_content', return_value={'display_html': ''}):
+        check('AI19 an empty document yields no examples',
+              app.get_doc_feature_examples('d2') == {})
+    with mock.patch.object(app, 'get_doc_content',
+                           return_value={'display_html': '<p>no features here</p>'}):
+        check('AI20 a doc with no FEATURES block yields no examples',
+              app.get_doc_feature_examples('d3') == {})
+
+    # ── line parser, both historical formats ──
+    _fd_sel = (3, 'C', 'MOR. Fem. Ending', 'select', ['-i', '-e', '-a'])
+    check('AI21 new format: words inside the brackets',
+          app._split_feature_line('MOR. Fem. Ending  [madrase]   -e', _fd_sel)
+          == ('madrase', '-e'))
+    check('AI22 old format: value inside the brackets, words after',
+          app._split_feature_line('MOR. Fem. Ending  [-e]  madrase', _fd_sel)
+          == ('madrase', '-e'))
+    check('AI23 a line for a different feature is rejected',
+          app._split_feature_line('LEX. "want"  [x]  y', _fd_sel) == (None, None))
+    check('AI24 a malformed line does not crash',
+          app._split_feature_line('MOR. Fem. Ending  [', _fd_sel) == ('', ''))
+finally:
+    app.FEATURE_DEFS = _saved_defs
+
+# ── wiring: all three CSV writers must use the shared helpers ──
+check('AI25 main results CSV uses the shared header',
+      source.count('_csv_feature_header()') >= 2, str(source.count('_csv_feature_header()')))
+check('AI26 all three CSV writers use the shared cell builder',
+      source.count('_csv_feature_cells(') >= 4, str(source.count('_csv_feature_cells(')))
+check('AI27 no CSV writer emits FALSE for an untagged cell any more',
+      source.count("'TRUE' if") == 1, str(source.count("'TRUE' if")))
+check('AI28 example lookup is cached',
+      '@st.cache_data(ttl=3600, show_spinner=False)\ndef get_doc_feature_examples' in source)
+check('AI29 example cache is keyed by column set (survives a rename)',
+      '_col_set: tuple = ()' in source and '_col_set=tuple((fd[1], fd[2])' in source)
+check('AI30 examples reuse the cached doc content, costing no extra API call',
+      'get_doc_content(doc_id, version)' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

@@ -2635,6 +2635,133 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
     }
 
 
+def _split_feature_line(text: str, fd: tuple) -> tuple:
+    """
+    Parse ONE line of a document's FEATURES block into (example_words, value).
+
+    Two formats exist across the corpus:
+        new: "name  [word1; word2]   value"
+        old: "name  [value]  word1, word2"
+    The bracket content is read as the VALUE (old format) when it matches one of
+    the feature's known options, or looks like an all-ASCII code rather than
+    transcription; otherwise it is read as the example words (new format).
+
+    Returns (None, None) when the line does not belong to `fd`.
+    """
+    if not text.startswith(fd[2] + '  ['):
+        return (None, None)
+    bo = text.find('[')
+    bc = text.find(']', bo)
+    if bo < 0 or bc < 0:
+        return ('', '')
+    inside = text[bo + 1:bc].strip()
+    after  = text[bc + 1:].strip()
+    known_vals = set(fd[4] or []) | {'+', '', 'TRUE', 'FALSE', 'True', 'False'}
+    is_old = (inside in known_vals or
+              (not any(ord(c) > 127 for c in inside) and inside == inside.upper()
+               and not inside.replace(' ', '').isalpha()))
+    return (after, inside) if is_old else (inside, after)
+
+
+def _doc_html_to_lines(html_doc: str) -> list:
+    """Flatten a Google Docs HTML export into plain per-paragraph text lines."""
+    if not html_doc:
+        return []
+    txt = re.sub(r'</p>|</div>|<br[^>]*>|</h[1-6]>', '\n', html_doc, flags=re.I)
+    txt = re.sub(r'<[^>]+>', '', txt)
+    txt = html_lib.unescape(txt).replace('\xa0', ' ')
+    return [ln.strip() for ln in txt.split('\n')]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_doc_feature_examples(doc_id: str, version: int = 0,
+                             _col_set: tuple = ()) -> dict:
+    """
+    {feature_name: "word1; word2"} — the words a researcher tagged as the
+    example for each feature in this document.
+
+    These words live ONLY in the Google Doc's FEATURES block; the spreadsheet
+    stores just the value. They are therefore read back out of the doc's HTML
+    export — which get_doc_content() already cached while searching, so this
+    costs no extra API call for any document that appeared in the results.
+
+    _col_set is part of the cache key so a renamed feature column invalidates
+    it, the same way _get_all_sheet_features() is keyed.
+    Returns {} if the document cannot be read.
+    """
+    try:
+        html_doc = (get_doc_content(doc_id, version) or {}).get('display_html', '')
+    except Exception:
+        return {}
+    if not html_doc:
+        return {}
+
+    out: dict = {}
+    in_feats = False
+    for line in _doc_html_to_lines(html_doc):
+        if line == 'FEATURES:':
+            in_feats = True
+            continue
+        if not in_feats or not line or line in FEAT_PREFIXES:
+            continue
+        for fd in FEATURE_DEFS:
+            ex, _val = _split_feature_line(line, fd)
+            if ex is not None:          # line belongs to this feature
+                if ex:
+                    out[fd[2]] = ex
+                break
+    return out
+
+
+def _csv_feature_header() -> list:
+    """
+    CSV column names for the feature block: every feature contributes TWO
+    columns — its value, and immediately beside it the word that was tagged
+    as the example for that value.
+    """
+    return [x for fd in FEATURE_DEFS for x in (fd[2], f'{fd[2]} — example')]
+
+
+def _csv_feature_cells(sheet_row, doc_id: str = '') -> list:
+    """
+    Flat [value, example, value, example, ...] in FEATURE_DEFS order, matching
+    _csv_feature_header().
+
+    An untagged bool feature exports as an EMPTY cell, never 'FALSE'. Blank
+    means "not assessed" while FALSE means "assessed and found absent"; writing
+    FALSE for an untouched cell would silently invent negative data across the
+    whole corpus.
+    """
+    vals: dict = {}
+    if sheet_row:
+        try:
+            vals = get_sheet_features(sheet_row) or {}
+        except Exception:
+            vals = {}
+
+    examples: dict = {}
+    if doc_id:
+        try:
+            _ver = st.session_state.get('_doc_versions', {}).get(doc_id, 0)
+            examples = get_doc_feature_examples(
+                doc_id, _ver,
+                _col_set=tuple((fd[1], fd[2]) for fd in FEATURE_DEFS),
+            ) or {}
+        except Exception:
+            examples = {}
+
+    out = []
+    for fd in FEATURE_DEFS:
+        v = vals.get(fd[1])
+        if fd[3] == 'bool':
+            cell = '' if v is None else ('TRUE' if v else 'FALSE')
+        else:
+            cell = v if v not in (None, '', False) else ''
+        out.append(cell)
+        out.append(examples.get(fd[2], ''))
+    return out
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  FEATURE READ / WRITE
 # ════════════════════════════════════════════════════════════════════════════════
@@ -4439,7 +4566,8 @@ if results:
         'gender':          'מגדר דובר',
         'status':          'Status',
     }
-    _feat_names_dl = [fd[2] for fd in FEATURE_DEFS]
+    # Two columns per feature: the value, and beside it the tagged example word.
+    _feat_names_dl = _csv_feature_header()
 
     _csv_w.writerow(
         ['#', 'Document', 'Link', 'Matches', 'Matched words']
@@ -4469,22 +4597,9 @@ if results:
         _corpus_entry = next((d for d in corpus if d['doc_id'] == _r['doc_id']), None)
         _meta_vals = [(_corpus_entry or _r).get(k, '') for k in _META_KEYS]
 
-        # Fetch feature values for this document's sheet row (cached)
-        _feat_vals = []
+        # Feature values + their example words (both cached; no extra API call)
         _srow = (_corpus_entry or {}).get('sheet_row') or _r.get('sheet_row')
-        if _srow:
-            try:
-                _fdata = get_sheet_features(_srow)
-                for _fd in FEATURE_DEFS:
-                    _v = _fdata.get(_fd[1])
-                    if _fd[3] == 'bool':
-                        _feat_vals.append('TRUE' if _v else 'FALSE')
-                    else:
-                        _feat_vals.append(_v if _v not in (None, '', False) else '')
-            except Exception:
-                _feat_vals = [''] * len(FEATURE_DEFS)
-        else:
-            _feat_vals = [''] * len(FEATURE_DEFS)
+        _feat_vals = _csv_feature_cells(_srow, _r['doc_id'])
 
         _csv_w.writerow(
             [_dl_rank, _r['name'], _link, _r.get('match_count', ''), _words]
@@ -4529,21 +4644,8 @@ if results:
             _link2 = f"https://docs.google.com/document/d/{_r['doc_id']}/edit"
             _ce2 = next((d for d in corpus if d['doc_id'] == _r['doc_id']), None)
             _mv2 = [(_ce2 or _r).get(k, '') for k in _META_KEYS]
-            _fv2 = []
             _srow2 = (_ce2 or {}).get('sheet_row') or _r.get('sheet_row')
-            if _srow2:
-                try:
-                    _fd2 = get_sheet_features(_srow2)
-                    for _f2 in FEATURE_DEFS:
-                        _v2 = _fd2.get(_f2[1])
-                        if _f2[3] == 'bool':
-                            _fv2.append('TRUE' if _v2 else 'FALSE')
-                        else:
-                            _fv2.append(_v2 if _v2 not in (None, '', False) else '')
-                except Exception:
-                    _fv2 = [''] * len(FEATURE_DEFS)
-            else:
-                _fv2 = [''] * len(FEATURE_DEFS)
+            _fv2 = _csv_feature_cells(_srow2, _r['doc_id'])
             _sel_w2.writerow(
                 [_sel_rank2, _r['name'], _link2, _comment2, _r.get('match_count', ''), _words2]
                 + _mv2 + _fv2
@@ -4874,7 +4976,8 @@ if st.session_state.get('_feat_search') and corpus:
                            'gender', 'status']
         _fb_meta_labels = ['שם יישוב', 'קהילה', 'Social Typology', 'Geo Typology',
                            'מגדר דובר', 'Status']
-        _all_feat_names = [fd[2] for fd in FEATURE_DEFS]
+        # Two columns per feature: value + the tagged example word beside it
+        _all_feat_names = _csv_feature_header()
         _fw.writerow(['#', 'Document', 'Link'] + _fb_meta_labels + _all_feat_names)
         # Same explicit rank column as the main search-results CSV, kept in
         # lock-step with the on-screen "#" prefix below.
@@ -4882,22 +4985,8 @@ if st.session_state.get('_feat_search') and corpus:
         for _fr in _feat_rows:
             _fb_rank += 1
             _fb_meta_vals = [_fr.get(k, '') for k in _fb_meta_keys]
-            # Fetch full feature row from sheet
-            _fb_feat_vals = []
-            _fb_srow = _fr.get('sheet_row')
-            if _fb_srow:
-                try:
-                    _fb_fdata = get_sheet_features(_fb_srow)
-                    for _fd in FEATURE_DEFS:
-                        _v = _fb_fdata.get(_fd[1])
-                        if _fd[3] == 'bool':
-                            _fb_feat_vals.append('TRUE' if _v else 'FALSE')
-                        else:
-                            _fb_feat_vals.append(_v if _v not in (None, '', False) else '')
-                except Exception:
-                    _fb_feat_vals = [''] * len(FEATURE_DEFS)
-            else:
-                _fb_feat_vals = [''] * len(FEATURE_DEFS)
+            # Full feature row + example words (both cached)
+            _fb_feat_vals = _csv_feature_cells(_fr.get('sheet_row'), _fr['doc_id'])
             _fw.writerow([
                 _fb_rank,
                 _fr['name'],
