@@ -253,7 +253,7 @@ Features שמופיעים בdoc FEATURES section אבל **אין להם עמוד
 ```bash
 python tests_full.py     # 85 טסטים — רגרסיה כללית
 python tests_deep.py     # 85 טסטים — feature-columns, cache, wildcards
-python tests_search.py   # 164 טסטים — חיפוש, טקסט, מסמכים, UX
+python tests_search.py   # 224 טסטים — חיפוש, טקסט, מסמכים, UX, multi-value
 ```
 
 `_harness.py` מכיל את ה-stubs המשותפים (Streamlit + Google APIs). `tests_search.py` מייבא ממנו; שני האחרים מכילים עותק משלהם.
@@ -286,6 +286,7 @@ python tests_search.py   # 164 טסטים — חיפוש, טקסט, מסמכים
 | W | Invariants על ה-sets של ה-wildcards |
 | X–Y | נתיבי כתיבה, טיפול בקלט שגוי |
 | Z | ארבעת שינויי ה-UX (ראה למטה) |
+| AA–AD | תיוג מרובה-ערכים: פרסור, מיזוג, התאמה בחיפוש, חיווט בקוד |
 
 ---
 
@@ -334,6 +335,58 @@ python tests_search.py   # 164 טסטים — חיפוש, טקסט, מסמכים
 - אחרת → "כל הקורפוס נסרק, אז זו התבנית ולא הפילטרים" + הצעות קונקרטיות
 
 אותו משפך קיים גם ב-Feature Browse, עם רמז נוסף על AND/OR ועל עמודות שמעולם לא תוייגו.
+
+---
+
+## תיוג מרובה-ערכים (multi-value tags)
+
+**כל פיצ'ר מסוג `select` יכול להחזיק כמה ערכים בו-זמנית.** זה נדרש כי חוקרים שונים מתייגים לגיטימית את אותו מסמך ברפלקסים שונים של אותו פיצ'ר — למשל `MOR. Fem. Ending` = `-e; -a`.
+
+**הכלל**: תיוג חדש **מתמזג** עם הקיים. שום דבר לא נדרס ולא נחסם.
+
+### פונקציות עזר (app.py, ליד `_feat_val_norm`)
+
+```python
+FEAT_VALUE_SEP = '; '
+
+_split_feat_values(raw, options)   # תא → רשימת ערכים
+_join_feat_values(values)          # רשימה → מחרוזת תא
+_merge_feat_values(existing, new, options)  # → (merged, added, duplicates)
+_feat_value_matches(cell, wanted, options)  # חברות, לא שוויון
+```
+
+### ⚠️ הפרסור חייב להיות option-aware
+
+שני ערכי אופציה **מכילים נקודה-פסיק בתוכם**:
+
+```
+-a; -ha only after -ū-
+-a; -ha only after -ū- / -i-
+```
+
+(בפיצ'ר `3.f.sg pron. ها-`). `split(';')` תמים היה קורע אותם לשני תגים מזויפים.
+
+**הפתרון**: הפרסר מנסה קודם להתאים אופציות **שלמות ידועות, הארוכה ביותר קודם**, ורק לטקסט שהוא לא מזהה נופל לפיצול על מפריד. לכן `_split_feat_values` מקבל את רשימת האופציות — **תמיד העבר את `fd[4]`**. בלי זה, אופציות שמכילות `;` יישברו.
+
+בקריאה מתקבלים גם `;` וגם `,` (כדי שתאים שנכתבו ע"י multi-select נייטיב של Sheets ימשיכו לעבוד). בכתיבה תמיד `'; '`.
+
+### מה השתנה בקוד
+
+| מקום | לפני | אחרי |
+|---|---|---|
+| `write_sheet_features` | conflict → מסרב לכתוב | ממזג, מחזיר notices |
+| דיאלוג ה-submit | אזהרה "overwritten" | info "tags were kept and yours added" |
+| Feature Browse | `_feat_val_norm(a) == _feat_val_norm(b)` | `_feat_value_matches` (חברות) |
+| tagging session | בחירה שנייה דורסת ראשונה | מצטברת |
+| תפריט ימני | ללא אינדיקציה | ✓ ליד ערכים שכבר מתויגים |
+| `_infer_column_types` | `-e; -a` נחשב אופציה אחת | מפוצל לערכים בודדים |
+
+### נקודות זהירות לפיתוח עתידי
+
+- פיצ'רים מסוג `bool` **לא** השתנו — נשארו חד-ערכיים.
+- `write_sheet_features` מחזיר עכשיו **notices, לא conflicts**. ערך חוזר לא-ריק **כבר לא אומר שהכתיבה נכשלה** — הוא רק תיאור של מה שמוזג. אל תתייחס אליו כשגיאה.
+- `_get_all_sheet_features` ממשיך להחזיר את התא כמחרוזת גולמית. הפיצול קורה בנקודות השימוש.
+- `inject_interaction_js` מקבל `sheet_row` אופציונלי כדי לסמן ✓. הקריאה עטופה ב-try/except — כישלון בקריאת הערכים לעולם לא יעצור רינדור של מסמך.
 
 ---
 
