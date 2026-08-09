@@ -598,9 +598,12 @@ allopts = {o for t in app.FEATURE_HEADER_DEFS for o in (t[3] or [])}
 check('I13 FEAT_NONE_OPTION is not a real option value',
       app.FEAT_NONE_OPTION not in allopts)
 
-# I14 — bool features are searched by truthiness, select by normalised equality
-check('I14 select comparison uses _feat_val_norm on both sides',
-      '_feat_val_norm(_cur) == _feat_val_norm(_fv)' in source)
+# I14 — bool features are searched by truthiness; select features are
+# MULTI-VALUE, so the comparison must be membership, not equality.
+check('I14 select comparison uses membership (_feat_value_matches)',
+      '_feat_value_matches(_cur, _fv, _fd[4])' in source)
+check('I14b the old equality comparison is gone',
+      '_feat_val_norm(_cur) == _feat_val_norm(_fv)' not in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -415,8 +415,9 @@ section('X. write_sheet_features / delete_feature_tag — argument shaping')
 check('X1 write_sheet_features bumps the cache version',
       '_features_version' in source)
 check('X2 delete_feature_tag exists', hasattr(app, 'delete_feature_tag'))
-check('X3 conflict detection compares against the current cell value',
-      'cell_is_empty' in source and 'conflicts.append' in source)
+check('X3 select writes merge instead of blocking on a conflict',
+      '_merge_feat_values(cur_val, new_val, fd[4])' in source
+      and 'conflicts.append' not in source)
 check('X4 a bool write uses the checkbox representation',
       "'+'" in source)
 check('X5 writes go through the resolved column letter, never a constant',
@@ -541,6 +542,158 @@ check('Z25 AND/OR hint shown when an AND search returns nothing',
       'Switch to **OR**' in source)
 check('Z26 an entirely untagged feature column is called out',
       'nothing has been tagged with this feature yet' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AA. Multi-value feature tags — parsing')
+# ══════════════════════════════════════════════════════════════════════════════
+
+sp = app._split_feat_values
+FEM = ['-i', '-e', '-a', 'pausal']
+# The two real options that contain ';' inside their own text
+TRICKY = ['-a', '-a / -ya (after -i-)', '-ha',
+          '-a; -ha only after -ū-',
+          '-a; -ha only after -ū- / -i-', '-hä#/-he#']
+
+check('AA1 empty cell -> []',            sp(None, FEM) == [])
+check('AA2 empty string -> []',          sp('', FEM) == [])
+check('AA3 False -> []',                 sp(False, FEM) == [])
+check('AA4 single value -> one item',    sp('-e', FEM) == ['-e'])
+check('AA5 two values split on ;',       sp('-e; -a', FEM) == ['-e', '-a'], str(sp('-e; -a', FEM)))
+check('AA6 the screenshot format "-e ; ; ; -a" parses to two values',
+      sp('-e ; ; ; -a', FEM) == ['-e', '-a'], str(sp('-e ; ; ; -a', FEM)))
+check('AA7 comma separator also accepted',
+      sp('-e, -a', FEM) == ['-e', '-a'], str(sp('-e, -a', FEM)))
+check('AA8 duplicates collapse',         sp('-e; -e', FEM) == ['-e'], str(sp('-e; -e', FEM)))
+check('AA9 order is preserved',          sp('-a; -e; -i', FEM) == ['-a', '-e', '-i'])
+check('AA10 whitespace trimmed',         sp('  -e ;   -a  ', FEM) == ['-e', '-a'])
+check('AA11 no options list -> plain split',
+      sp('x; y', None) == ['x', 'y'], str(sp('x; y', None)))
+check('AA12 unknown value still returned',
+      sp('-e; totally-new', FEM) == ['-e', 'totally-new'], str(sp('-e; totally-new', FEM)))
+
+# THE critical case: an option that contains ';' must NOT be shredded
+check('AA13 option containing ";" stays ONE value',
+      sp('-a; -ha only after -ū-', TRICKY) == ['-a; -ha only after -ū-'],
+      str(sp('-a; -ha only after -ū-', TRICKY)))
+check('AA14 the longer ";"-containing option also stays whole',
+      sp('-a; -ha only after -ū- / -i-', TRICKY) == ['-a; -ha only after -ū- / -i-'],
+      str(sp('-a; -ha only after -ū- / -i-', TRICKY)))
+check('AA15 ";"-containing option combined with another value',
+      sp('-a; -ha only after -ū-; -ha', TRICKY) == ['-a; -ha only after -ū-', '-ha'],
+      str(sp('-a; -ha only after -ū-; -ha', TRICKY)))
+check('AA16 bare "-a" is not swallowed by the longer option',
+      sp('-a', TRICKY) == ['-a'], str(sp('-a', TRICKY)))
+check('AA17 longest-first: "-a" then the long option',
+      sp('-a; -a; -ha only after -ū-', TRICKY)
+      == ['-a', '-a; -ha only after -ū-'],
+      str(sp('-a; -a; -ha only after -ū-', TRICKY)))
+check('AA18 NFD input parses the same as NFC',
+      sp(unicodedata.normalize('NFD', '-a; -ha only after -ū-'), TRICKY)
+      == ['-a; -ha only after -ū-'],
+      str(sp(unicodedata.normalize('NFD', '-a; -ha only after -ū-'), TRICKY)))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AB. Multi-value feature tags — merging')
+# ══════════════════════════════════════════════════════════════════════════════
+
+mg = app._merge_feat_values
+
+merged, added, dup = mg(None, '-e', FEM)
+check('AB1 tagging an empty cell', (merged, added, dup) == ('-e', ['-e'], []), str((merged, added, dup)))
+
+merged, added, dup = mg('-e', '-a', FEM)
+check('AB2 second value is ADDED, not overwritten',
+      merged == '-e; -a', merged)
+check('AB3 the added value is reported', added == ['-a'], str(added))
+check('AB4 nothing reported as duplicate', dup == [], str(dup))
+
+merged, added, dup = mg('-e', '-e', FEM)
+check('AB5 re-tagging the same value changes nothing', merged == '-e', merged)
+check('AB6 duplicate is reported, not added',
+      added == [] and dup == ['-e'], str((added, dup)))
+
+merged, added, dup = mg('-e; -a', '-i', FEM)
+check('AB7 third value appends', merged == '-e; -a; -i', merged)
+
+merged, added, dup = mg('-e', ['-a', '-i'], FEM)
+check('AB8 a list of new values merges in one call', merged == '-e; -a; -i', merged)
+
+merged, added, dup = mg('-e', '-a; -i', FEM)
+check('AB9 a "; "-joined string of new values also merges',
+      merged == '-e; -a; -i', merged)
+
+merged, added, dup = mg('-e; -a', '-a', FEM)
+check('AB10 adding an already-present value is a no-op',
+      merged == '-e; -a' and added == [], str((merged, added)))
+
+# The existing value must survive even when it is a ";"-containing option
+merged, added, dup = mg('-a; -ha only after -ū-', '-ha', TRICKY)
+check('AB11 ";"-containing existing value is preserved on merge',
+      merged == '-a; -ha only after -ū-; -ha', merged)
+
+check('AB12 merging never removes anything',
+      all(v in mg('-e; -a; -i', '-x', FEM)[0] for v in ['-e', '-a', '-i']))
+check('AB13 empty new value is ignored',
+      mg('-e', '', FEM)[0] == '-e', mg('-e', '', FEM)[0])
+check('AB14 join helper uses "; "', app._join_feat_values(['a', 'b']) == 'a; b')
+check('AB15 join drops blanks', app._join_feat_values(['a', '', '  ', 'b']) == 'a; b')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AC. Multi-value feature tags — search matching')
+# ══════════════════════════════════════════════════════════════════════════════
+
+fm = app._feat_value_matches
+check('AC1 single-value cell matches its value',      fm('-e', '-e', FEM) is True)
+check('AC2 multi-value cell matches the FIRST value', fm('-e; -a', '-e', FEM) is True)
+check('AC3 multi-value cell matches the SECOND value',fm('-e; -a', '-a', FEM) is True)
+check('AC4 multi-value cell rejects an absent value', fm('-e; -a', '-i', FEM) is False)
+check('AC5 empty cell matches nothing',               fm(None, '-e', FEM) is False)
+check('AC6 matching is case-insensitive',             fm('-E; -a', '-e', FEM) is True)
+check('AC7 matching ignores surrounding whitespace',  fm('  -e ;  -a ', '-a', FEM) is True)
+check('AC8 NFD cell matches an NFC query',
+      fm(unicodedata.normalize('NFD', 'ǧ'), unicodedata.normalize('NFC', 'ǧ'), ['ǧ']) is True)
+check('AC9 ";"-containing option is matched as a whole',
+      fm('-a; -ha only after -ū-', '-a; -ha only after -ū-', TRICKY) is True)
+check('AC10 a ";"-containing cell does NOT falsely match its fragment',
+      fm('-a; -ha only after -ū-', '-ha', TRICKY) is False,
+      'the whole string is one option, so "-ha" alone must not match')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AD. Multi-value wiring through the app')
+# ══════════════════════════════════════════════════════════════════════════════
+
+check('AD1 separator constant defined',      'FEAT_VALUE_SEP' in source)
+check('AD2 write_sheet_features merges select values',
+      '_merge_feat_values(cur_val, new_val, fd[4])' in source)
+check('AD3 write_sheet_features returns notices, not []',
+      re.search(r'return notices', source) is not None)
+check('AD4 bool features keep single-value semantics',
+      "if fd[3] == 'bool':" in source and 'bool(new_val)' in source)
+check('AD5 the submit UI no longer speaks of overwriting',
+      'now overwritten with' not in source)
+check('AD6 the submit UI reports merges as info, not a warning',
+      'Existing tags were kept and yours added alongside' in source)
+check('AD7 pending tags accumulate within one tagging session',
+      '_acc, _, _ = _merge_feat_values(_prev, feat_val, fd[4])' in source)
+check('AD8 type inference splits multi-values before building options',
+      'distinct.update(_split_feat_values(v))' in source)
+check('AD9 the empty-state diagnostic lists values individually',
+      'for _one in _split_feat_values(_cur, _fd[4]):' in source)
+check('AD10 the context menu receives the current values',
+      'const CURRENT' in source and 'current_vals_js' in source)
+check('AD11 already-tagged values are ticked in the menu',
+      'Already tagged on this document' in source)
+check('AD12 the menu says a pick will be added alongside existing tags',
+      'Will be added alongside' in source)
+check('AD13 inject_interaction_js takes a sheet_row',
+      'sheet_row: int = None' in source)
+check('AD14 every call site passes sheet_row',
+      source.count('sheet_row=(') >= 3, str(source.count('sheet_row=(')))
+check('AD15 reading current values can never break rendering',
+      re.search(r'except Exception:\s*\n\s*_current_map = \{\}', source) is not None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

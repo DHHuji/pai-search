@@ -725,17 +725,37 @@ def highlight_in_exported_html(html_doc: str, rx_or_list, position: str = 'anywh
 _STRIP_MARK = re.compile(r'</?mark[^>]*>')
 
 
-def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None, tagged_words: list = None) -> str:
+def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None,
+                          tagged_words: list = None, sheet_row: int = None) -> str:
     """
     Inject right-click context menu and edit-mode support into a Google Docs
     HTML export before it is rendered in the iframe.
     nav_words: plain-text list of matched words to show as clickable scroll chips.
+    sheet_row: when given, values already tagged on that row are marked with a
+               ✓ in the value submenu, so a user adding a second value can see
+               what is already there instead of guessing.
     """
     # Serialize feature list for JavaScript
     features_js = json.dumps([
         {'name': fd[2], 'type': fd[3], 'opts': fd[4] or []}
         for fd in FEATURE_DEFS
     ])
+
+    # Values already on this row, per feature name — drives the ✓ markers.
+    # Best-effort only: a failure here must never stop the document rendering.
+    _current_map: dict = {}
+    if sheet_row:
+        try:
+            _row_vals = get_sheet_features(sheet_row)
+            for fd in FEATURE_DEFS:
+                if fd[3] == 'bool':
+                    continue
+                _vals = _split_feat_values(_row_vals.get(fd[1]), fd[4])
+                if _vals:
+                    _current_map[fd[2]] = _vals
+        except Exception:
+            _current_map = {}
+    current_vals_js = json.dumps(_current_map, ensure_ascii=False)
 
     nav_words_js    = json.dumps(nav_words or [])
     tagged_words_js = json.dumps(list(dict.fromkeys(tagged_words or [])))  # deduplicated
@@ -889,6 +909,7 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
 <script>
 (function(){{
   const FEATURES   = {features_js};
+  const CURRENT    = {current_vals_js};   // feature name -> values already tagged
   const DOC_ID     = {json.dumps(doc_id)};
   const menu       = document.getElementById('pai-ctx-menu');
   const header     = document.getElementById('pai-ctx-header');
@@ -1028,18 +1049,37 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
           }});
           si.addEventListener('mouseenter', function() {{ hideSub2(); }});
         }} else {{
-          // Select feature — hover opens a third-level value submenu
+          // Select feature — hover opens a third-level value submenu.
+          // Select features are MULTI-VALUE: picking a second value adds to
+          // the first rather than replacing it, so already-tagged values are
+          // marked with a ✓ and the feature row shows how many are set.
+          const cur   = CURRENT[fd.name] || [];
+          const badge = cur.length
+            ? '<span style="font-size:10px;color:#7ee8a2;flex-shrink:0;padding-left:6px">✓' +
+              (cur.length > 1 ? cur.length : '') + '</span>'
+            : '';
           si.innerHTML = '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">'
             + fd.name + '</span>'
+            + badge
             + '<span style="opacity:.5;flex-shrink:0;padding-left:6px">▸</span>';
           si.style.display = 'flex';
+          if (cur.length) si.title = 'Already tagged: ' + cur.join(', ');
           si.addEventListener('mouseenter', function() {{
             activeSub2Item = si;
             subMenu2.innerHTML = '';
             fd.opts.forEach(function(opt) {{
               const si2 = document.createElement('div');
               si2.className = 'ctx-sub-item';
-              si2.textContent = opt;
+              const isSet = cur.some(function(c) {{
+                return String(c).trim().toLowerCase() === String(opt).trim().toLowerCase();
+              }});
+              si2.style.display = 'flex';
+              si2.innerHTML =
+                '<span style="flex:1">' + opt + '</span>' +
+                (isSet ? '<span style="color:#7ee8a2;padding-left:10px">✓</span>' : '');
+              si2.title = isSet
+                ? 'Already tagged on this document'
+                : (cur.length ? 'Will be added alongside: ' + cur.join(', ') : '');
               si2.addEventListener('click', function(e) {{
                 e.stopPropagation();
                 storeTag(fd.name, opt);
@@ -1611,6 +1651,126 @@ def _feat_val_norm(v) -> str:
     """
     return unicodedata.normalize('NFC', str(v or '')).strip().lower()
 
+
+# ── Multi-value feature tags ──────────────────────────────────────────────────
+# A 'select' feature cell may hold SEVERAL values at once, e.g.
+#   MOR. Fem. Ending  ->  "-e; -a"
+# because different researchers legitimately tag the same document with
+# different reflexes. Tagging therefore MERGES rather than overwrites.
+#
+# Parsing is option-aware on purpose. Two real option values contain the
+# separator themselves:
+#     '-a; -ha only after -ū-'
+#     '-a; -ha only after -ū- / -i-'
+# A naive split(';') would shred those into two bogus tags, so the parser
+# first tries to match whole known options (longest first) and only falls
+# back to separator-splitting for text it doesn't recognise.
+FEAT_VALUE_SEP = '; '
+
+
+def _split_feat_values(raw, options=None) -> list[str]:
+    """
+    Parse a feature cell into its individual values.
+    Returns [] for an empty/None/False cell. Order is preserved, duplicates
+    (compared with _feat_val_norm) are dropped.
+    """
+    if raw is None or raw is False:
+        return []
+    s = unicodedata.normalize('NFC', str(raw)).strip()
+    if not s:
+        return []
+
+    opts = [o for o in (options or []) if o and str(o).strip()]
+
+    # Fast path: the whole cell is exactly one known option. This is what
+    # protects the two options that contain ';' in their own text.
+    for o in opts:
+        if _feat_val_norm(o) == _feat_val_norm(s):
+            return [o]
+
+    out: list = []
+    if opts:
+        # Greedy longest-first scan, so '-a; -ha only after -ū-' wins over '-a'.
+        by_len = sorted(opts, key=lambda o: len(str(o)), reverse=True)
+        i, n = 0, len(s)
+        while i < n:
+            if s[i] in ';,' or s[i].isspace():
+                i += 1
+                continue
+            matched = None
+            for o in by_len:
+                seg = s[i:i + len(str(o))]
+                if _feat_val_norm(seg) == _feat_val_norm(o):
+                    matched = str(o)
+                    break
+            if matched:
+                out.append(matched)
+                i += len(matched)
+            else:
+                j = i
+                while j < n and s[j] not in ';,':
+                    j += 1
+                chunk = s[i:j].strip()
+                if chunk:
+                    out.append(chunk)
+                i = j + 1
+    else:
+        # No known option list — plain separator split. Accepts ';' and ','
+        # so cells written by Google Sheets' native multi-select still parse.
+        out = [p.strip() for p in re.split(r'[;,]', s) if p.strip()]
+
+    seen, uniq = set(), []
+    for v in out:
+        k = _feat_val_norm(v)
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(v)
+    return uniq
+
+
+def _join_feat_values(values) -> str:
+    """Render a list of feature values back into a single cell string."""
+    return FEAT_VALUE_SEP.join(str(v) for v in values if str(v).strip())
+
+
+def _merge_feat_values(existing_raw, new_val, options=None) -> tuple:
+    """
+    Merge new_val (a single value, or a list, or a '; '-joined string) into the
+    values already in the cell.
+
+    Returns (merged_cell_string, added_values, already_present_values).
+    Nothing is ever removed — that is the whole point of multi-value tagging.
+    """
+    current = _split_feat_values(existing_raw, options)
+    incoming = (new_val if isinstance(new_val, (list, tuple))
+                else _split_feat_values(new_val, options))
+
+    have = {_feat_val_norm(v) for v in current}
+    added, dup = [], []
+    merged = list(current)
+    for v in incoming:
+        k = _feat_val_norm(v)
+        if not k:
+            continue
+        if k in have:
+            dup.append(v)
+        else:
+            have.add(k)
+            merged.append(v)
+            added.append(v)
+    return _join_feat_values(merged), added, dup
+
+
+def _feat_value_matches(cell_raw, wanted, options=None) -> bool:
+    """
+    True if `wanted` is one of the values in a (possibly multi-value) cell.
+    Used by Feature Browse so a document tagged '-e; -a' is found by a search
+    for either '-e' or '-a'.
+    """
+    target = _feat_val_norm(wanted)
+    return any(_feat_val_norm(v) == target
+               for v in _split_feat_values(cell_raw, options))
+
 # Features that appear in the doc FEATURES section but are NOT in the O-AO spreadsheet columns.
 # '"was"' is intentionally included here (rather than in FEATURE_DEFS): the live
 # sheet's reorganization on 2026-06-22 dropped its dedicated column (the new AJ
@@ -1960,8 +2120,16 @@ def _infer_column_types(unknown_cols: tuple) -> dict:
             ).execute()
             for (col, ht), vr in zip(cols_no_dv, batch.get('valueRanges', [])):
                 col_vals = (vr.get('values') or [[]])[0]
-                distinct  = {v.strip() for v in col_vals if v.strip()}
-                non_bool  = sorted(v for v in distinct if v not in _BOOL_VALS)
+                # Cells may hold several values at once ("-e; -a"). Split them
+                # so the inferred option list contains the individual values —
+                # otherwise every combination a researcher happened to tag
+                # would show up in the dropdown as its own bogus option.
+                distinct: set = set()
+                for v in col_vals:
+                    if not str(v).strip():
+                        continue
+                    distinct.update(_split_feat_values(v))
+                non_bool = sorted(v for v in distinct if v not in _BOOL_VALS)
                 result[ht] = ('select', non_bool) if non_bool else ('bool', None)
 
         # ── Step 3: merge — DV-derived options take precedence over inference.
@@ -2384,38 +2552,48 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
     """
     Write feature changes to Google Sheets.
     changes: {col_letter: new_value}
-    Returns list of conflict messages (non-empty if any existing value differs).
+
+    Select-type features are MULTI-VALUE: a new tag is merged into whatever is
+    already in the cell rather than replacing it, so two researchers tagging
+    different reflexes of the same feature both keep their tag. Nothing is ever
+    silently dropped or blocked.
+
+    Returns a list of human-readable notices describing what was merged
+    (empty when every write went into an empty cell). Callers should DISPLAY
+    these — unlike the old conflict list, a non-empty return no longer means
+    the write was refused.
     """
     _, _, sheets_svc = get_services()
     current = get_sheet_features(sheet_row)
-    conflicts = []
+    notices: list = []
 
-    # Detect conflicts: only flag if there is already a real (non-empty) value
-    # that differs from the new tag.  False / None / 0 / '' = empty cell, not a conflict.
-    for col_letter, new_val in changes.items():
-        cur_val = current.get(col_letter)
-        cell_is_empty = cur_val is None or cur_val is False or cur_val == '' or cur_val == 0
-        if not cell_is_empty and cur_val != new_val:
-            fd = next((f for f in FEATURE_DEFS if f[1] == col_letter), None)
-            name = fd[2] if fd else col_letter
-            conflicts.append(
-                f"**{name}**: spreadsheet has `{cur_val}`, you tagged `{new_val}`"
-            )
-
-    if conflicts:
-        return conflicts
-
-    # Write each changed cell
     data = []
     for col_letter, new_val in changes.items():
         fd = next((f for f in FEATURE_DEFS if f[1] == col_letter), None)
         if fd is None:
             continue
         cell_a1 = f"Recordings!{col_letter}{sheet_row}"
+
         if fd[3] == 'bool':
             data.append({'range': cell_a1, 'values': [[bool(new_val)]]})
-        else:
-            data.append({'range': cell_a1, 'values': [[new_val]]})
+            continue
+
+        # ── select: merge instead of overwrite ────────────────────────────────
+        cur_val = current.get(col_letter)
+        merged, added, dup = _merge_feat_values(cur_val, new_val, fd[4])
+        existing = _split_feat_values(cur_val, fd[4])
+
+        if existing and added:
+            notices.append(
+                f"**{fd[2]}**: added `{'`, `'.join(added)}` — "
+                f"this document is now tagged `{merged}`"
+            )
+        elif dup and not added:
+            notices.append(
+                f"**{fd[2]}**: `{'`, `'.join(dup)}` was already tagged — no change"
+            )
+
+        data.append({'range': cell_a1, 'values': [[merged]]})
 
     if data:
         sheets_svc.spreadsheets().values().batchUpdate(
@@ -2425,7 +2603,7 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
         # Bust the batch-features cache so the next open reflects the write
         st.session_state['_features_version'] = st.session_state.get('_features_version', 0) + 1
 
-    return []
+    return notices
 
 
 def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str):
@@ -3143,23 +3321,40 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                     st.session_state[f"{sk}_confirm"] = False
                     return
 
-                # Separate features by: conflict / same-value duplicate / genuinely new
-                conflicts  = []   # existing value differs → overwrite, but warn
-                to_write   = {}   # features with new (or overwriting) values → write
+                # Decide what actually needs writing.
+                # Select features are multi-value: an existing different value
+                # is NOT a conflict — the new tag is merged alongside it by
+                # write_sheet_features(). We only skip the write when the value
+                # is already present, and we collect a notice either way so the
+                # user can see what the document ended up tagged with.
+                merge_notes = []
+                to_write    = {}
                 for col_l, new_val in (pending or {}).items():
-                    cur_val = current.get(col_l)
+                    fd_tmp   = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
+                    name_tmp = fd_tmp[2] if fd_tmp else col_l
+                    cur_val  = current.get(col_l)
+
+                    if fd_tmp and fd_tmp[3] != 'bool':
+                        _existing = _split_feat_values(cur_val, fd_tmp[4])
+                        _merged, _added, _dup = _merge_feat_values(
+                            cur_val, new_val, fd_tmp[4])
+                        if _added:
+                            to_write[col_l] = new_val      # merged inside the writer
+                            if _existing:
+                                merge_notes.append(
+                                    f"**{name_tmp}**: added `{'`, `'.join(_added)}` "
+                                    f"alongside `{_join_feat_values(_existing)}` → now `{_merged}`"
+                                )
+                        else:
+                            merge_notes.append(
+                                f"**{name_tmp}**: already tagged `{_join_feat_values(_existing)}` — no change"
+                            )
+                        continue
+
+                    # bool features keep the old semantics
                     cell_empty = cur_val in (None, False, '', 0)
-                    if not cell_empty and cur_val != new_val:
-                        fd_tmp = next((f for f in FEATURE_DEFS if f[1] == col_l), None)
-                        name_tmp = fd_tmp[2] if fd_tmp else col_l
-                        conflicts.append(
-                            f"**{name_tmp}**: was `{cur_val}`, now overwritten with `{new_val}`"
-                        )
-                        to_write[col_l] = new_val   # overwrite — user intent wins
-                    elif cell_empty:
+                    if cell_empty or cur_val != new_val:
                         to_write[col_l] = new_val
-                    # else: same value already in sheet → skip spreadsheet write,
-                    #       but still update example word in Google Doc below
 
                 # Write all values to spreadsheet (with retry on transient errors)
                 if to_write:
@@ -3183,11 +3378,13 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                         except Exception as e:
                             st.error(f"Row {extra_row} write failed: {e}")
 
-                # Warn about overwritten values (after successful write)
-                if conflicts:
-                    st.warning(
-                        "⚠️  Some features already had a different value — overwritten:\n\n"
-                        + "\n".join(f"- {c}" for c in conflicts)
+                # Report what was merged (after successful write). This is
+                # informational, not a warning — nothing was overwritten.
+                if merge_notes:
+                    st.info(
+                        "🏷️  Existing tags were kept and yours added alongside:\n\n"
+                        + "\n".join(f"- {c}" for c in merge_notes),
+                        icon="🏷️",
                     )
 
                 # Update Google Doc: only the pending features (NOT the full table)
@@ -3841,7 +4038,15 @@ if _bridge_tag:
                     st.session_state[f"{sk}_pending"] = {}
                 if f"{sk}_pending_words" not in st.session_state:
                     st.session_state[f"{sk}_pending_words"] = {}
-                st.session_state[f"{sk}_pending"][fd[1]] = feat_val
+                # Select features are multi-value, so picking a SECOND value for
+                # the same feature in one tagging session must add to the first,
+                # not replace it (the same rule the spreadsheet write applies).
+                if fd[3] != 'bool':
+                    _prev = st.session_state[f"{sk}_pending"].get(fd[1])
+                    _acc, _, _ = _merge_feat_values(_prev, feat_val, fd[4])
+                    st.session_state[f"{sk}_pending"][fd[1]] = _acc
+                else:
+                    st.session_state[f"{sk}_pending"][fd[1]] = feat_val
                 # Accumulate clicked words (selText) — keep a list per feature so
                 # tagging a second word under the same feature doesn't erase the first.
                 sel_text = _bridge_tag.get('selText', '').strip()
@@ -4262,7 +4467,10 @@ if results:
                         for w in (words if isinstance(words, list) else [words])
                         if w
                     ))
-                    interactive_html = inject_interaction_js(r['display_html'], r['doc_id'], nav_words, _tagged)
+                    interactive_html = inject_interaction_js(
+                        r['display_html'], r['doc_id'], nav_words, _tagged,
+                        sheet_row=(doc_id_to_rows.get(r['doc_id']) or [r.get('sheet_row')])[0],
+                    )
                     import warnings
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
@@ -4283,7 +4491,10 @@ if results:
                                     for w in (words if isinstance(words, list) else [words])
                                     if w
                                 ))
-                                _ihtml = inject_interaction_js(_content['display_html'], r['doc_id'], [], _tagged)
+                                _ihtml = inject_interaction_js(
+                                    _content['display_html'], r['doc_id'], [], _tagged,
+                                    sheet_row=(doc_id_to_rows.get(r['doc_id']) or [r.get('sheet_row')])[0],
+                                )
                                 import warnings
                                 with warnings.catch_warnings():
                                     warnings.simplefilter("ignore")
@@ -4361,20 +4572,24 @@ if st.session_state.get('_feat_search') and corpus:
             _matched_vals = {}
             for _fn, _fd, _fv in _feat_conditions:
                 _cur = _fvals.get(_fd[1])
+                # Diagnostic set: record each value INDIVIDUALLY, so a cell
+                # holding "-e; -a" reports two distinct values rather than one
+                # combined string the user would never recognise.
                 if _fn in _seen_col_vals and str(_cur or '').strip():
-                    _seen_col_vals[_fn].add(str(_cur).strip())
+                    for _one in _split_feat_values(_cur, _fd[4]):
+                        _seen_col_vals[_fn].add(_one)
                 if _fd[3] == 'bool':
                     _hit = bool(_cur) is True
                 elif _fv == FEAT_NONE_OPTION:
                     # "None" = the spreadsheet column is empty / not yet tagged
                     _hit = not str(_cur or '').strip()
                 else:
-                    # Compare normalized (NFC, case/whitespace-insensitive) so that
-                    # diacritic encoding differences between the dropdown option
-                    # strings and hand-entered spreadsheet text (e.g. composed vs.
-                    # decomposed Unicode for ǧ/ḏ̣-type characters) don't cause a
-                    # false "no match" for values that look identical on screen.
-                    _hit = _feat_val_norm(_cur) == _feat_val_norm(_fv)
+                    # Membership, not equality: a select cell may hold several
+                    # values ("-e; -a") because different researchers tagged
+                    # different reflexes. Searching for either one must find it.
+                    # _feat_value_matches normalises (NFC, case, whitespace) so
+                    # composed vs. decomposed diacritics still compare equal.
+                    _hit = _feat_value_matches(_cur, _fv, _fd[4])
                 _cond_results.append(_hit)
                 _matched_vals[_fn] = _cur
 
@@ -4515,7 +4730,11 @@ if st.session_state.get('_feat_search') and corpus:
                                 for w in (words if isinstance(words, list) else [words])
                                 if w
                             ))
-                            _fb_ihtml = inject_interaction_js(_fb_content['display_html'], _fr['doc_id'], [], _fb_tagged)
+                            _fb_ihtml = inject_interaction_js(
+                                _fb_content['display_html'], _fr['doc_id'], [], _fb_tagged,
+                                sheet_row=(_feat_doc_id_to_rows.get(_fr['doc_id'])
+                                           or [_fr.get('sheet_row')])[0],
+                            )
                             import warnings
                             with warnings.catch_warnings():
                                 warnings.simplefilter("ignore")
