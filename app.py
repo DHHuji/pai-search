@@ -3998,9 +3998,20 @@ with mid:
         """, unsafe_allow_html=True)
 
     # ── Search bar component (handles typing + PAI keyboard) ─────────────────
+    # initial_value is only applied when the iframe (re)mounts. Passing
+    # _last_pattern was wrong during the rerun that runs a NEW search:
+    # _last_pattern still holds the PREVIOUS query at this point (it is updated
+    # a few lines below, from this very call's result), so a remount mid-search
+    # redisplayed the old string while the new one was actually being searched.
+    # The component's own stored value is the freshest source of what the user
+    # last submitted, so prefer it and fall back to _last_pattern.
+    _prev_sb = st.session_state.get('searchbar') or {}
+    _sb_initial = (_prev_sb.get('query')
+                   if isinstance(_prev_sb, dict) and _prev_sb.get('query') is not None
+                   else st.session_state.get('_last_pattern', ''))
     _sb_result = _SEARCH_BAR(
         key="searchbar",
-        initial_value=st.session_state.get('_last_pattern', ''),
+        initial_value=_sb_initial,
         disabled=st.session_state.get('_searching', False),
     )
     _sb_ts          = (_sb_result.get('timestamp', 0) if _sb_result else 0)
@@ -4449,6 +4460,9 @@ if search_clicked and pattern_input.strip() and corpus:
         search_mode = 'transcription'  # use transcription search internally
     st.session_state['_searching'] = True
     st.session_state['_search_start_ts'] = time.time()
+    # Drop the previous run's "no results" notice so it cannot be mistaken for
+    # the outcome of the search that is only just starting.
+    st.session_state.pop('_empty_state', None)
     try:
         # Funnel counts for the empty-state diagnosis below: how many documents
         # existed, and how many survived the filters. Without this, a zero-result
@@ -4459,6 +4473,15 @@ if search_clicked and pattern_input.strip() and corpus:
 
         def _explain_empty(what: str) -> None:
             """Show where the funnel collapsed, and the most likely fix."""
+            # Remember it too: results are re-rendered from session_state on
+            # every later rerun, so a message printed only here disappeared as
+            # soon as the user touched anything, leaving a blank page with no
+            # indication whether the search found nothing or had died.
+            st.session_state['_empty_state'] = {
+                'what':   what,
+                'total':  _n_corpus_total,
+                'after':  _n_after_filter,
+            }
             st.info(f'No results found for {what}.', icon="🔍")
             _stages = (
                 f"**{_n_corpus_total}** documents in corpus &nbsp;→&nbsp; "
@@ -4495,6 +4518,8 @@ if search_clicked and pattern_input.strip() and corpus:
             results = run_search(_effective_pattern, position, name_filter, corpus, active_filters)
             if not results:
                 _explain_empty(f'**{_effective_pattern}**')
+        if results:
+            st.session_state.pop('_empty_state', None)
         st.session_state['_search_results']  = results
         st.session_state['_search_pattern']  = pattern_input.strip()
         st.session_state['_search_mode']     = search_mode
@@ -4530,6 +4555,31 @@ elif not _filters_active and not search_clicked and not pattern_input.strip():
 # Always display stored results (survive rerun after bridge tag)
 results       = st.session_state.get('_search_results', [])
 pattern_shown = st.session_state.get('_search_pattern', '')
+
+# Re-show the "no results" explanation on every rerun until the next search.
+# Without this the page went blank after any interaction and there was no way
+# to tell an empty result set from a search that had silently failed.
+_es = st.session_state.get('_empty_state')
+if _es and not results and not st.session_state.get('_searching'):
+    st.info(f"No results found for {_es['what']}.", icon="🔍")
+    st.markdown(
+        '<div class="filter-banner" '
+        'style="background:#fff8e0;border-color:#ffe082;color:#7a5f00">'
+        f"<b>{_es['total']}</b> documents in corpus &nbsp;→&nbsp; "
+        f"<b>{_es['after']}</b> after filters &nbsp;→&nbsp; "
+        "<b>0</b> matched"
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if _es['after'] == 0 and _es['total'] > 0:
+        st.caption("⚠️ Your filters excluded every document — the pattern was "
+                   "never tested. Clear the filters and search again.")
+    elif _es['after'] < _es['total']:
+        st.caption(f"ℹ️ Filters limited this search to {_es['after']} of "
+                   f"{_es['total']} documents.")
+    else:
+        st.caption("ℹ️ The whole corpus was searched, so this is the pattern, "
+                   "not the filters.")
 mode_shown    = st.session_state.get('_search_mode', 'transcription')
 
 if results:

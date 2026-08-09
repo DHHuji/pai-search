@@ -1235,6 +1235,65 @@ check('AK20 a failed read tells the user instead of hiding the panel',
 check('AK21 the notice makes clear existing tags are unaffected',
       'your existing tags are unaffected' in source)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AL. Reported bugs — search bar, empty state, replace cost')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. the search bar showed the PREVIOUS query after a second search ──
+# initial_value is only applied when the iframe (re)mounts. _last_pattern is
+# still the previous query at the moment the component is rendered, so a
+# remount during the search rerun redisplayed the old string.
+check('AL1 the search bar seeds from the component\'s own stored value',
+      "_prev_sb = st.session_state.get('searchbar')" in source)
+check('AL2 it falls back to _last_pattern only when there is no stored value',
+      "else st.session_state.get('_last_pattern', '')" in source)
+check('AL3 the stale initial_value=_last_pattern call is gone',
+      "initial_value=st.session_state.get('_last_pattern', '')" not in source)
+check('AL4 a non-dict stored value cannot crash the fallback',
+      'isinstance(_prev_sb, dict)' in source)
+
+# ── 2. no indication when a search returned nothing ──
+# The explanation was printed inside the search block only; results are
+# re-rendered from session_state on every later rerun, so it vanished on the
+# next interaction and left a blank page.
+check('AL5 the empty state is recorded, not just printed',
+      "st.session_state['_empty_state'] = {" in source)
+check('AL6 it is re-rendered on later reruns',
+      "_es = st.session_state.get('_empty_state')" in source)
+check('AL7 it is only shown when there really are no results',
+      'if _es and not results' in source)
+check('AL8 it is hidden while a search is running',
+      "not st.session_state.get('_searching')" in source)
+check('AL9 a successful search clears it',
+      "if results:\n            st.session_state.pop('_empty_state', None)" in source)
+check('AL10 starting a new search clears the previous notice',
+      "# Drop the previous run's \"no results\" notice" in source)
+check('AL11 the persistent notice still shows the funnel counts',
+      "documents in corpus &nbsp;→&nbsp; " in source
+      and source.count('after filters &nbsp;→&nbsp;') >= 2)
+
+# ── 3. replace-word wiping the whole cache (reported; already fixed) ──
+check('AL12 replace bumps only the edited document\'s version',
+      '_dv[doc_id] = _dv.get(doc_id, 0) + 1' in source)
+# Count real CALLS, not mentions in comments.
+_clear_lines = [ln for ln in source.split('\n')
+                if ln.strip() == 'st.cache_data.clear()']
+check('AL13 there is exactly ONE global cache clear in the whole app',
+      len(_clear_lines) == 1, str(_clear_lines))
+# ...and it belongs to the explicit sidebar button, not to any edit path
+_idx = next(i for i, ln in enumerate(source.split('\n'))
+            if ln.strip() == 'st.cache_data.clear()')
+_ctx = '\n'.join(source.split('\n')[max(0, _idx - 6):_idx])
+check('AL14 the only global clear is the sidebar button',
+      'sidebar_clear_cache' in _ctx, _ctx[-160:])
+check('AL14b no cache clear sits in the replace path',
+      'clear()' not in source.split('def replace_one_occurrence_in_gdoc')[1]
+                             .split('\ndef ')[0])
+check('AL15 the background preload runs once per session, not per edit',
+      "not st.session_state.get('_preload_started')" in source)
+check('AL16 doc content is cached per (doc_id, version)',
+      'def get_doc_content(doc_id: str, version: int = 0)' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')
