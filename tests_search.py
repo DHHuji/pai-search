@@ -1305,7 +1305,7 @@ _AT_DEFS = [
     (1, 'A', 'LEX. "He is saying"',     'select', ['biʾūl', 'ygūl']),
     (2, 'B', 'LEX. "Rooster/Roosters"', 'select', ['dīk / dyūk', 'dīč / dyuk']),
     (3, 'C', 'LEX. "Heavy"',            'select', ['tʾīl']),
-    (4, 'D', 'LEX. "Coffee"',           'select', ['ʾahwi']),
+    (4, 'D', 'LEX. "Coffee"',           'select', ['ʾahwe/i']),
     (5, 'E', 'PHON. *q',                'select', ['q', 'ʾ', 'g']),
     (6, 'F', 'PHON. *k',                'select', ['k', 'č', 'k~č']),
 ]
@@ -1338,7 +1338,11 @@ try:
     _d = lambda v: app.derive_phon_from_table(v)[0]
     _u = lambda v: app.derive_phon_from_table(v)[1]
     _R = 'LEX. "Rooster/Roosters"'
-    _full = {'LEX. "He is saying"': 'biʾūl', 'LEX. "Coffee"': 'ʾahwi',
+    # Values must be the ones the Word template can actually produce. Its
+    # coffee option is the single entry 'ʾahwe/i' — an earlier version of this
+    # rule tested for 'ʾahwi', which the template cannot emit, so rule 1 could
+    # never have fired on a real document.
+    _full = {'LEX. "He is saying"': 'biʾūl', 'LEX. "Coffee"': 'ʾahwe/i',
              'LEX. "Heavy"': 'tʾīl'}
     check('AM5 rule 1 fires on all three pieces of evidence',
           _d(_full) == {'PHON. *q': 'ʾ'}, str(_d(_full)))
@@ -1348,12 +1352,25 @@ try:
               'PHON. *q' not in _d(_partial), str(_d(_partial)))
     check('AM7 rule 1 needs saying=biʾūl exactly',
           'PHON. *q' not in _d({**_full, 'LEX. "He is saying"': 'ygūl'}))
-    for _c in ('ʾahwa', 'ʾahwe', 'ʾahwi'):
-        check(f'AM8 rule 1 accepts coffee={_c}',
-              _d({**_full, 'LEX. "Coffee"': _c}) == {'PHON. *q': 'ʾ'})
+    check('AM8 rule 1 accepts the template\'s coffee option ʾahwe/i',
+          _d({**_full, 'LEX. "Coffee"': 'ʾahwe/i'}) == {'PHON. *q': 'ʾ'})
+    for _c in ('qahwe/i', 'kahwa/e/i', 'gahwa', 'gaháwa/ih', 'gháwa'):
+        check(f'AM8b rule 1 rejects non-glottal coffee {_c}',
+              'PHON. *q' not in _d({**_full, 'LEX. "Coffee"': _c}))
     for _h in ('tʾīl', 'ṯʾīl'):
         check(f'AM9 rule 1 accepts heavy={_h}',
               _d({**_full, 'LEX. "Heavy"': _h}) == {'PHON. *q': 'ʾ'})
+    for _h in ('ṯqīl', 'ṯkīl', 'ṯgīl', 'ṯigīl', 'ṯiǧīl'):
+        check(f'AM9b rule 1 rejects non-glottal heavy {_h}',
+              'PHON. *q' not in _d({**_full, 'LEX. "Heavy"': _h}))
+    for _sy in ('biqūl', 'bikūl', 'bigūl', 'ygūl'):
+        check(f'AM9c rule 1 rejects non-glottal saying {_sy}',
+              'PHON. *q' not in _d({**_full, 'LEX. "He is saying"': _sy}))
+    # Every rule value must exist in the template's own closed list
+    for _col, _opts in app.Q_GLOTTAL_OPTIONS.items():
+        check(f'AM9d the ʾ-options for {_col.replace(chr(34),"")} are real template options',
+              set(_opts) <= set(app.DOC_TABLE_OPTIONS[_col]),
+              f'{_opts} vs {app.DOC_TABLE_OPTIONS[_col]}')
 
     check('AM10 rule 2  k/k -> k',   _d({_R: 'dīk / dyūk'}) == {'PHON. *k': 'k'})
     check('AM11 rule 3  č/č -> č',   _d({_R: 'dīč / dyūč'}) == {'PHON. *k': 'č'})
@@ -1384,7 +1401,7 @@ try:
 
     # ── the scan ──
     _DOCS = {
-        'd1': _tbl('biʾūl', 'dīk-dyūk', 'tʾīl', 'ʾahwi'),
+        'd1': _tbl('biʾūl', 'dīk-dyūk', 'tʾīl', 'ʾahwe/i'),
         'd2': _tbl('biʾūl', 'dīč / dyuk', 'Select', 'Select'),
         'd3': _tbl('ygūl', 'dīk / dyūk', 'Select', 'Select'),
         'd4': '<p>no table</p>',
@@ -1461,6 +1478,71 @@ check('AM39 apply writes only the sheet, not 700+ documents',
       source.split('def apply_auto_tags')[1].split('\ndef ')[0])
 check('AM40 the write is batched rather than one call per row',
       'for i in range(0, len(data), 500)' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AN. Reading .docx transcriptions')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Researchers write transcriptions in Word. Files stored in Drive as real .docx
+# cannot be fetched with export_media (Docs-editors only), so before the
+# fallback they were invisible to the app entirely — no search hits, no table,
+# no FEATURES block.
+import os as _os
+_DOCX = '/sessions/laughing-eager-ramanujan/mnt/uploads/Ġǧ.1F.R3 (t).docx'
+if _os.path.exists(_DOCX):
+    _raw  = open(_DOCX, 'rb').read()
+    _html = app._docx_to_html(_raw)
+    check('AN1 a real .docx converts to HTML', len(_html) > 500, str(len(_html)))
+    check('AN2 paragraphs are preserved',  _html.count('<p>') > 20, str(_html.count('<p>')))
+    check('AN3 the table is preserved',    '<table>' in _html)
+    check('AN4 italic runs are marked',    'font-style:italic' in _html)
+    check('AN5 the search index can be built from it',
+          len(app.extract_transcription_text(_html)) > 200,
+          str(len(app.extract_transcription_text(_html))))
+
+    _sv = app.FEATURE_DEFS
+    app.FEATURE_DEFS = [
+        (1, 'A', 'LEX. "He is saying"',     'select', ['biʾūl']),
+        (2, 'B', 'LEX. "Rooster/Roosters"', 'select', ['dīk / dyūk']),
+        (3, 'C', 'LEX. "Heavy"',            'select', ['tʾīl']),
+    ]
+    try:
+        with mock.patch.object(app, 'get_doc_content',
+                               return_value={'display_html': _html}):
+            _t = app.parse_doc_feature_table('d')
+        check('AN6 the transcription table is read out of the .docx',
+              _t.get('LEX. "He is saying"') == 'biʾūl'
+              and _t.get('LEX. "Heavy"') == 'tʾīl', str(_t))
+        check('AN7 the rules run on it',
+              app.derive_phon_from_table(_t)[0] == {'PHON. *k': 'k'},
+              str(app.derive_phon_from_table(_t)))
+    finally:
+        app.FEATURE_DEFS = _sv
+else:
+    check('AN1-7 skipped — sample .docx not present', True)
+
+check('AN8 malformed bytes do not crash the converter',
+      app._docx_to_html(b'not a zip') == '')
+check('AN9 get_doc_content falls back to a raw download',
+      'files().get_media(fileId=doc_id)' in source)
+check('AN10 the fallback only runs when the export fails',
+      'except Exception:\n            # Not a Docs-editors file' in source)
+check('AN11 a failed fallback still returns the empty shape',
+      "return {'italic_text': '', 'display_html': ''}" in source)
+
+# ── the closed lists themselves ──
+check('AN12 the template closed lists are recorded', 'DOC_TABLE_OPTIONS' in source)
+check('AN13 every mapped feature has a closed list',
+      set(app.DOC_TABLE_OPTIONS) == set(app.DOC_TABLE_FEATURE_MAP.values()),
+      str(set(app.DOC_TABLE_FEATURE_MAP.values()) ^ set(app.DOC_TABLE_OPTIONS)))
+check('AN14 the rooster list is exactly the three the rules cover',
+      app.DOC_TABLE_OPTIONS['LEX. "Rooster/Roosters"']
+      == ['dīk-dyūk', 'dīč-dyūč', 'dīč-dyūk'])
+# every rooster option must yield a reflex — none may fall through unmatched
+for _opt in app.DOC_TABLE_OPTIONS['LEX. "Rooster/Roosters"']:
+    _dd, _uu = app.derive_phon_from_table({'LEX. "Rooster/Roosters"': _opt})
+    check(f'AN15 rooster option {_opt} yields a reflex',
+          'PHON. *k' in _dd and not _uu, f'{_dd} {_uu}')
 
 
 # ══════════════════════════════════════════════════════════════════════════════

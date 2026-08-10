@@ -2500,6 +2500,54 @@ def load_corpus_index() -> list[dict]:
     return corpus
 
 
+def _docx_to_html(raw: bytes) -> str:
+    """
+    Convert a raw .docx into the same simple HTML shape the Google export
+    produces, so every downstream consumer — the search index, the transcription
+    table reader, the FEATURES block parser and the viewer — works on Word files
+    without knowing the difference.
+
+    Only what those consumers actually rely on is reproduced: paragraphs, italic
+    runs (the search index is built from italic text) and tables.
+    """
+    try:
+        import zipfile as _zf
+        with _zf.ZipFile(io.BytesIO(raw)) as z:
+            xml = z.read('word/document.xml').decode('utf-8', 'replace')
+    except Exception:
+        return ''
+
+    def _runs(block: str) -> str:
+        out = []
+        for run in re.findall(r'<w:r[ >].*?</w:r>', block, re.S):
+            txt = ''.join(re.findall(r'<w:t[^>]*>(.*?)</w:t>', run, re.S))
+            if not txt:
+                continue
+            # <w:i/> marks an italic run; <w:iCs/> alone is complex-script only
+            if re.search(r'<w:i\s*/>|<w:i\s+[^>]*/>', run):
+                out.append(f'<span style="font-style:italic">{txt}</span>')
+            else:
+                out.append(txt)
+        return ''.join(out)
+
+    html_parts = ['<html><body>']
+    # Walk paragraphs and tables in document order
+    for m in re.finditer(r'<w:tbl>.*?</w:tbl>|<w:p[ >].*?</w:p>', xml, re.S):
+        chunk = m.group(0)
+        if chunk.startswith('<w:tbl>'):
+            html_parts.append('<table>')
+            for row in re.findall(r'<w:tr[ >].*?</w:tr>', chunk, re.S):
+                html_parts.append('<tr>')
+                for cell in re.findall(r'<w:tc>.*?</w:tc>', cell_src := row, re.S):
+                    html_parts.append(f'<td>{_runs(cell)}</td>')
+                html_parts.append('</tr>')
+            html_parts.append('</table>')
+        else:
+            html_parts.append(f'<p>{_runs(chunk)}</p>')
+    html_parts.append('</body></html>')
+    return ''.join(html_parts)
+
+
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def get_doc_content(doc_id: str, version: int = 0) -> dict:
     """
@@ -2508,16 +2556,30 @@ def get_doc_content(doc_id: str, version: int = 0) -> dict:
       - italic_text:  italic body text (after ***) extracted from the HTML CSS classes
                       — used as the search index (reliable, no Docs API needed)
     """
-    try:
-        drive_svc, _, _ = get_services()
-
-        export_req = drive_svc.files().export_media(fileId=doc_id, mimeType='text/html')
+    def _download(req) -> bytes:
         buf = io.BytesIO()
-        dl  = MediaIoBaseDownload(buf, export_req)
+        dl  = MediaIoBaseDownload(buf, req)
         done = False
         while not done:
             _, done = dl.next_chunk()
-        display_html = buf.getvalue().decode('utf-8')
+        return buf.getvalue()
+
+    try:
+        drive_svc, _, _ = get_services()
+        try:
+            # Google-native Doc — export as HTML
+            display_html = _download(drive_svc.files().export_media(
+                fileId=doc_id, mimeType='text/html')).decode('utf-8')
+        except Exception:
+            # Not a Docs-editors file. Researchers write transcriptions in Word
+            # and some are stored in Drive as real .docx, which export_media
+            # cannot handle — those documents were completely invisible to the
+            # app (no search hits, no table, no FEATURES block). Download the
+            # raw file and convert it instead.
+            display_html = _docx_to_html(_download(
+                drive_svc.files().get_media(fileId=doc_id)))
+            if not display_html:
+                return {'italic_text': '', 'display_html': ''}
 
     except Exception:
         return {'italic_text': '', 'display_html': ''}
@@ -2671,6 +2733,34 @@ def get_doc_feature_exceptions(doc_id: str, version: int = 0,
 
 DOC_TABLE_UNSET = {'select', 'select…', '-', '—', ''}
 
+# The CLOSED LISTS the researcher picks from, taken from the Word template's
+# dropdowns. These are the only values that can legitimately appear in a table
+# cell, and they are NOT spelled the way the sheet spells them — the sheet has
+# 'dīk / dyūk' where the template offers 'dīk-dyūk', and the template's coffee
+# option is the single entry 'ʾahwe/i' covering both vowels.
+DOC_TABLE_OPTIONS = {
+    'LEX. "He is saying"':     ['biʾūl', 'biqūl', 'bikūl', 'bigūl', 'ygūl'],
+    'LEX. "Rooster/Roosters"': ['dīk-dyūk', 'dīč-dyūč', 'dīč-dyūk'],
+    'LEX. "Heavy"':            ['tʾīl', 'ṯqīl', 'ṯkīl', 'ṯgīl', 'ṯʾīl',
+                                'ṯigīl', 'ṯiǧīl'],
+    'LEX. "Coffee"':           ['ʾahwe/i', 'qahwe/i', 'kahwa/e/i', 'gahwa',
+                                'gaháwa/ih', 'gháwa'],
+    'LEX. "now"':              ['hallaʾ', 'halgēt', 'halkēt', 'halʾēt',
+                                '(h)alḥīn', 'hassa', 'issa', 'hassāʿ',
+                                'haʾʾēte'],
+}
+
+# Which option in each column shows *q surfacing as the glottal stop ʾ.
+# Rule 1 needs ALL THREE. Written as the exact template options rather than as
+# free-hand spellings: an earlier version tested for 'ʾahwa'/'ʾahwe'/'ʾahwi',
+# none of which the template can produce — its ʾ-option is 'ʾahwe/i' — so the
+# rule could never fire.
+Q_GLOTTAL_OPTIONS = {
+    'LEX. "He is saying"': {'biʾūl'},
+    'LEX. "Heavy"':        {'tʾīl', 'ṯʾīl'},
+    'LEX. "Coffee"':       {'ʾahwe/i'},
+}
+
 # Arabic table heading -> corpus feature name
 DOC_TABLE_FEATURE_MAP = {
     'يقول':      'LEX. "He is saying"',
@@ -2720,7 +2810,13 @@ def parse_doc_feature_table(doc_id: str, version: int = 0) -> dict:
         if len(rows) < 2:
             continue
         def _cells(row):
-            return [html_lib.unescape(re.sub(r'<[^>]+>', '', c)).replace('\xa0', ' ').strip()
+            # NFC-normalise here, as tokenize() and _feat_val_norm() do: Word
+            # files can carry decomposed diacritics, and an un-normalised value
+            # compares unequal to the same string written in NFC.
+            return [unicodedata.normalize(
+                        'NFC',
+                        html_lib.unescape(re.sub(r'<[^>]+>', '', c))
+                    ).replace('\xa0', ' ').strip()
                     for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.S | re.I)]
         heads = _cells(rows[0])
         vals  = _cells(rows[1])
@@ -2756,13 +2852,13 @@ def derive_phon_from_table(table_vals: dict) -> tuple:
     derived, unmatched = {}, []
     _n = _feat_val_norm
 
-    # ── Rule 1 — needs all three pieces of evidence ──
-    saying = _n(table_vals.get('LEX. "He is saying"'))
-    coffee = _n(table_vals.get('LEX. "Coffee"'))
-    heavy  = _n(table_vals.get('LEX. "Heavy"'))
-    if (saying == _n('biʾūl')
-            and coffee in {_n(c) for c in ('ʾahwa', 'ʾahwe', 'ʾahwi')}
-            and heavy in {_n(h) for h in ('tʾīl', 'ṯʾīl')}):
+    # ── Rule 1 — *q = ʾ, and only when all three columns agree on it ──
+    # Each column is checked against the ʾ-options of its own closed list, so
+    # the test tracks the template rather than a guess at how a value is spelled.
+    if all(
+        _n(table_vals.get(_col)) in {_n(o) for o in _opts}
+        for _col, _opts in Q_GLOTTAL_OPTIONS.items()
+    ):
         derived['PHON. *q'] = 'ʾ'
 
     # ── Rules 2-4 ──
