@@ -1353,11 +1353,16 @@ try:
     for _sy in ('biqūl', 'bikūl', 'bigūl', 'ygūl'):
         check(f'AM9c rule 1 rejects non-glottal saying {_sy}',
               'PHON. *q' not in _d({**_full, 'LEX. "He is saying"': _sy}))
-    # Every rule value must exist in the template's own closed list
+    # At least one ʾ-option per column must be a value the template can really
+    # produce — otherwise the rule cannot fire on any document, which is exactly
+    # the bug where it looked for 'ʾahwi' while the template offered 'ʾahwe/i'.
+    # Extra spellings beyond that are allowed: they are the literal forms from
+    # the stated rule, kept so the rule survives a future split of the list.
     for _col, _opts in app.Q_GLOTTAL_OPTIONS.items():
-        check(f'AM9d the ʾ-options for {_col.replace(chr(34),"")} are real template options',
-              set(_opts) <= set(app.DOC_TABLE_OPTIONS[_col]),
-              f'{_opts} vs {app.DOC_TABLE_OPTIONS[_col]}')
+        _real = set(_opts) & set(app.DOC_TABLE_OPTIONS[_col])
+        check(f'AM9d {_col.replace(chr(34),"")} has a REACHABLE ʾ-option',
+              bool(_real),
+              f'none of {_opts} is in {app.DOC_TABLE_OPTIONS[_col]}')
 
     check('AM10 rule 2  k/k -> k',   _d({_R: 'dīk / dyūk'}) == {'PHON. *k': 'k'})
     check('AM11 rule 3  č/č -> č',   _d({_R: 'dīč / dyūč'}) == {'PHON. *k': 'č'})
@@ -1913,6 +1918,89 @@ check('AR22 building shows progress, since it reads documents',
       'Collecting example words' in source)
 check('AR23 it stops early once every feature has its quota',
       'no point reading further' in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AS. All five table columns; dropdown mismatches reported as a to-do')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── every table column maps to its LEX. feature ──
+_EXPECTED_MAP = {
+    'يقول':      'LEX. "He is saying"',
+    'ديكديوك':   'LEX. "Rooster/Roosters"',
+    'ثقيل':      'LEX. "Heavy"',
+    'قهوة':      'LEX. "Coffee"',
+    'الآن':      'LEX. "now"',
+}
+check('AS1 all five table columns are mapped',
+      app.DOC_TABLE_FEATURE_MAP == _EXPECTED_MAP,
+      str(app.DOC_TABLE_FEATURE_MAP))
+check('AS2 each mapped column has its closed list',
+      set(app.DOC_TABLE_OPTIONS) == set(_EXPECTED_MAP.values()))
+
+# ── the rule accepts the template value AND the literal rule spellings ──
+for _c in ('ʾahwe/i', 'ʾahwa', 'ʾahwe', 'ʾahwi'):
+    check(f'AS3 rule 1 accepts coffee={_c}',
+          _c in app.Q_GLOTTAL_OPTIONS['LEX. "Coffee"'])
+check('AS4 rule 1 still rejects non-glottal coffee',
+      'qahwe/i' not in app.Q_GLOTTAL_OPTIONS['LEX. "Coffee"'])
+
+# ── scan with sheet dropdowns that do NOT match the template ──
+_AS_DEFS = [
+    (1, 'A', 'LEX. "He is saying"',     'select', ['biʾūl', 'ygūl']),
+    (2, 'B', 'LEX. "Rooster/Roosters"', 'select', ['dīk / dyūk', 'dīč / dyuk']),
+    (3, 'C', 'LEX. "Heavy"',            'select', ['tʾīl', 'ṯqīl']),
+    (4, 'D', 'LEX. "Coffee"',           'select', ['ʾahwi']),      # lacks ʾahwe/i
+    (5, 'E', 'LEX. "now"',              'select', ['alḥīn']),      # lacks (h)alḥīn
+    (6, 'F', 'PHON. *q',                'select', ['q', 'ʾ', 'g']),
+    (7, 'G', 'PHON. *k',                'select', ['k', 'č', 'k~č']),
+]
+def _as_tbl(*vals):
+    _h = ['يقول', 'ديك \\ ديوك', 'ثقيل', 'قهوة', 'الآن']
+    return ('<table><tr>' + ''.join(f'<td>{x}</td>' for x in _h) + '</tr><tr>'
+            + ''.join(f'<td>{v}</td>' for v in vals) + '</tr></table>')
+
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = _AS_DEFS
+try:
+    _DOCS = {'d1': _as_tbl('biʾūl', 'dīk-dyūk', 'tʾīl', 'ʾahwe/i', '(h)alḥīn')}
+    with mock.patch.object(app, 'get_doc_content',
+                           side_effect=lambda d, v=0: {'display_html': _DOCS[d]}), \
+         mock.patch.object(app, 'get_sheet_features', return_value={}):
+        _r = app.scan_auto_tags([{'doc_id': 'd1', 'name': 'D1', 'sheet_row': 1}])
+    _pv = {p['feature']: p['value'] for p in _r['proposals']}
+
+    check('AS5 columns whose value IS in the dropdown are written',
+          _pv.get('LEX. "He is saying"') == 'biʾūl'
+          and _pv.get('LEX. "Heavy"') == 'tʾīl', str(_pv))
+    check('AS6 the rooster spelling is canonicalised to the sheet option',
+          _pv.get('LEX. "Rooster/Roosters"') == 'dīk / dyūk', str(_pv))
+    check('AS7 a value missing from the dropdown is NOT written',
+          'LEX. "Coffee"' not in _pv and 'LEX. "now"' not in _pv, str(_pv))
+
+    # the derivations read the TABLE, so a blocked LEX. copy does not stop them
+    check('AS8 rule 1 fires from the table even when the Coffee copy is blocked',
+          _pv.get('PHON. *q') == 'ʾ', str(_pv))
+    check('AS9 rule 2 fires alongside it', _pv.get('PHON. *k') == 'k', str(_pv))
+
+    # the report has to be actionable
+    _todo = {(u['feature'], u['value']) for u in _r['unmatched'] if u.get('feature')}
+    check('AS10 each mismatch names the column AND the missing option',
+          _todo == {('LEX. "Coffee"', 'ʾahwe/i'), ('LEX. "now"', '(h)alḥīn')},
+          str(_todo))
+    check('AS11 mismatches carry structured fields, not just prose',
+          all({'feature', 'value', 'doc'} <= set(u)
+              for u in _r['unmatched'] if u.get('feature')))
+finally:
+    app.FEATURE_DEFS = _saved
+
+check('AS12 the preview groups mismatches into one fix per dropdown',
+      '_todo.setdefault((_um[\'feature\'], _um[\'value\']), [])' in source)
+check('AS13 the preview says what to add where',
+      'dropdown option(s) to add in the sheet' in source
+      and 'add `{_v}` to **{_f}**' in source)
+check('AS14 it explains those values were NOT written',
+      'they were "\n                            "NOT written' in source
+      or 'NOT written' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

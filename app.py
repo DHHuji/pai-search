@@ -2795,10 +2795,14 @@ DOC_TABLE_OPTIONS = {
 # free-hand spellings: an earlier version tested for 'ʾahwa'/'ʾahwe'/'ʾahwi',
 # none of which the template can produce — its ʾ-option is 'ʾahwe/i' — so the
 # rule could never fire.
+# The template's own ʾ-option is listed first; the extra spellings are the
+# literal forms from the stated rule ("ʾahwa/ʾahwe/ʾahwi"). The template cannot
+# currently produce them, but accepting them costs nothing and means the rule
+# keeps working if the closed list is ever split into separate entries.
 Q_GLOTTAL_OPTIONS = {
     'LEX. "He is saying"': {'biʾūl'},
     'LEX. "Heavy"':        {'tʾīl', 'ṯʾīl'},
-    'LEX. "Coffee"':       {'ʾahwe/i'},
+    'LEX. "Coffee"':       {'ʾahwe/i', 'ʾahwa', 'ʾahwe', 'ʾahwi'},
 }
 
 # Arabic table heading -> corpus feature name
@@ -3057,8 +3061,12 @@ def scan_auto_tags(corpus: list, progress=None) -> dict:
             _fdx = by_name.get(f)
             _canon = canonicalise_table_value(v, _fdx[4] if _fdx else None)
             if _canon is None:
+                # Record the column and the exact value so the report can be
+                # read as a to-do list: "add this option to that dropdown".
                 unmatched.append({
                     'doc': doc.get('name', ''),
+                    'feature': f,
+                    'value': v,
                     'detail': f'{f} = "{v}" is not one of that column\'s options',
                 })
                 continue
@@ -4550,9 +4558,34 @@ with st.sidebar:
                             f"`{_cf['value']}`"
                         )
             if _at['unmatched']:
-                with st.expander(f"❓ {len(_at['unmatched'])} unrecognised values"):
-                    for _um in _at['unmatched'][:40]:
-                        st.caption(f"**{_um['doc']}** · {_um['detail']}")
+                # Group by (column, value): every document hitting the same
+                # mismatch is one dropdown fix, not N separate problems.
+                _todo: dict = {}
+                for _um in _at['unmatched']:
+                    if _um.get('feature'):
+                        _todo.setdefault((_um['feature'], _um['value']), []).append(
+                            _um['doc'])
+                if _todo:
+                    with st.expander(
+                            f"🔧 {len(_todo)} dropdown option(s) to add in the sheet"):
+                        st.caption(
+                            "These values are written in the documents but are "
+                            "not offered by the column's dropdown, so they were "
+                            "NOT written. Add each option to its column in "
+                            "Google Sheets, then scan again."
+                        )
+                        for (_f, _v), _docs in sorted(_todo.items()):
+                            st.markdown(
+                                f"- add `{_v}` to **{_f}**  "
+                                f"<small>({len(_docs)} document"
+                                f"{'s' if len(_docs) != 1 else ''})</small>",
+                                unsafe_allow_html=True,
+                            )
+                _other = [u for u in _at['unmatched'] if not u.get('feature')]
+                if _other:
+                    with st.expander(f"❓ {len(_other)} unrecognised reflex value(s)"):
+                        for _um in _other[:40]:
+                            st.caption(f"**{_um['doc']}** · {_um['detail']}")
 
     st.markdown("### 📚 Corpus")
     if corpus:
