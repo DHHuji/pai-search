@@ -1744,6 +1744,61 @@ check('AP24 feature-browse metadata is sourced from the corpus entry',
       '_fb_corpus_by_id' in source
       and '_fb_src = _fb_corpus_by_id.get' in source)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AQ. Keyboards match; button labels are readable')
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── the replace-word keyboard must offer the same characters as the search bar ──
+_KB_HTML = open('/sessions/laughing-eager-ramanujan/mnt/pai-search/'
+                'searchbar/index.html').read()
+def _kb_arr(name):
+    _m = re.search(rf'var {name}\s*=\s*(\[.*?\]);', _KB_HTML, re.S)
+    return json.loads(_m.group(1).replace("'", '"'))
+
+_search_chars = _kb_arr('SPECIAL') + _kb_arr('PLAIN') + _kb_arr('VOWELS')
+_py_chars     = app.KB_SPECIAL + app.KB_PLAIN + app.KB_VOWELS
+
+check('AQ1 the Python rows match searchbar/index.html exactly',
+      _py_chars == _search_chars,
+      f'missing={[c for c in _search_chars if c not in _py_chars]} '
+      f'extra={[c for c in _py_chars if c not in _search_chars]}')
+check('AQ2 each row matches individually',
+      app.KB_SPECIAL == _kb_arr('SPECIAL')
+      and app.KB_PLAIN == _kb_arr('PLAIN')
+      and app.KB_VOWELS == _kb_arr('VOWELS'))
+
+_ctx_html = app.inject_interaction_js('<p>x</p>', 'd')
+_ctx = json.loads(re.search(r'var CTX_CHARS\s*=\s*(\[.*?\]);',
+                            _ctx_html, re.S).group(1))
+check('AQ3 the rendered replace keyboard has the same characters',
+      _ctx == _search_chars,
+      f'missing={[c for c in _search_chars if c not in _ctx]}')
+# the specific characters that were missing before
+for _c in ['‿', 'ḏ', 'ḏ̣', 'ⁱ', 'ā̈', 'b', 'q', 'z']:
+    check(f'AQ4 the replace keyboard now offers {_c!r}', _c in _ctx)
+check('AQ5 the keyboard is built from the shared rows, not a copy',
+      'CTX_CHARS   = {ctx_chars_js}' in source
+      and 'KB_SPECIAL + KB_PLAIN + KB_VOWELS' in source)
+check('AQ6 wildcards are deliberately excluded from a replacement',
+      not ({'C', 'V', '$', '^', '#'} & set(_ctx)),
+      str({'C', 'V', '$', '^', '#'} & set(_ctx)))
+
+# ── button labels must not be dark text on a blue background ──
+check('AQ7 button label colour is set on the inner elements too',
+      'div[data-testid="stButton"] button *' in source)
+check('AQ8 download buttons are covered',
+      'div[data-testid="stDownloadButton"] button *' in source)
+check('AQ9 form-submit buttons are covered',
+      'div[data-testid="stFormSubmitButton"] button *' in source)
+check('AQ10 the label is explicitly white',
+      'color: #ffffff !important' in source)
+check('AQ11 svg icons in buttons are coloured too',
+      'fill:  #ffffff !important' in source)
+check('AQ12 a disabled button still reads as disabled',
+      'button:disabled' in source and '#6b7f95' in source)
+check('AQ13 the reason is recorded for whoever touches this next',
+      'Streamlit wraps the label in' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

@@ -223,6 +223,43 @@ div[data-testid="stButton"] button[kind="secondary"]:hover {
   background: var(--sky-800) !important;
 }
 
+/* ── Button LABEL colour ──
+   Setting color on the <button> is not enough: Streamlit wraps the label in
+   its own element (a <p> inside stMarkdownContainer), and that element carries
+   the theme's textColor. On a blue button that rendered as near-black text on
+   blue — legible only just. These rules colour the label itself.
+   Download and form-submit buttons live under different testids, so they are
+   listed explicitly rather than assumed to inherit. */
+div[data-testid="stButton"] button,
+div[data-testid="stButton"] button *,
+div[data-testid="stDownloadButton"] button,
+div[data-testid="stDownloadButton"] button *,
+div[data-testid="stFormSubmitButton"] button,
+div[data-testid="stFormSubmitButton"] button * {
+  color: #ffffff !important;
+  fill:  #ffffff !important;
+}
+div[data-testid="stDownloadButton"] button,
+div[data-testid="stFormSubmitButton"] button {
+  background: var(--sky-600) !important;
+  border: none !important; border-radius: 12px !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 0.9rem !important; padding: 0.6rem 1.5rem !important;
+}
+div[data-testid="stDownloadButton"] button:hover,
+div[data-testid="stFormSubmitButton"] button:hover {
+  background: var(--sky-800) !important;
+}
+/* A disabled button must still read as disabled, not as an active one */
+div[data-testid="stButton"] button:disabled,
+div[data-testid="stButton"] button:disabled *,
+div[data-testid="stDownloadButton"] button:disabled,
+div[data-testid="stDownloadButton"] button:disabled * {
+  background: var(--sky-200) !important;
+  color: #6b7f95 !important;
+  fill:  #6b7f95 !important;
+}
+
 /* ── Result expanders ── */
 div[data-testid="stExpander"].result-expander > details {
   background: white !important;
@@ -324,6 +361,20 @@ LAMNR:     set  = {'l','ḷ','m','ṃ','r','ṛ','n'}       # L wildcard (liquid
 #  delimiters split these into two separate words ("i" + "lli") instead of
 #  the single intended word.
 WORD_DELIM = re.compile(r'[\s,.:;!?\[\]{}"\'—–#]+|ʿ\u203Fʿ')
+
+# ── PAI character keyboard rows ───────────────────────────────────────────────
+# The SAME rows the search bar offers (searchbar/index.html). Defined here so
+# the right-click "replace word" keyboard is built from one list rather than a
+# hand-copied subset — it used to be missing ‿ ḏ ḏ̣ ⁱ ā̈ and every plain
+# consonant, so characters typeable in a search could not be typed in a
+# replacement. A test compares these against searchbar/index.html, so the two
+# cannot drift apart again.
+# Wildcards and anchors (C V $ ^ #) are deliberately NOT here: they are search
+# syntax, and inserting one into a replacement word would insert the literal
+# character.
+KB_SPECIAL = ['ʾ','ʿ','‿','ḥ','ḍ','ṭ','ṯ','ġ','ğ','ž','č','š','ṣ','ḏ','ḏ̣','ⁱ']
+KB_PLAIN   = ['b','d','f','g','h','k','l','m','n','q','r','s','t','w','x','y','z']
+KB_VOWELS  = ['a','e','i','u','o','ə','ā','ē','ī','ō','ū','ā̈']
 
 
 def _alts(items) -> str:
@@ -800,6 +851,9 @@ def inject_interaction_js(html_doc: str, doc_id: str, nav_words: list = None,
             _current_map = {}
     current_vals_js = json.dumps(_current_map, ensure_ascii=False)
 
+    # Same keyboard rows as the search bar — see KB_SPECIAL/KB_PLAIN/KB_VOWELS
+    ctx_chars_js    = json.dumps(KB_SPECIAL + KB_PLAIN + KB_VOWELS,
+                                 ensure_ascii=False)
     nav_words_js    = json.dumps(nav_words or [])
     tagged_words_js = json.dumps(list(dict.fromkeys(tagged_words or [])))  # deduplicated
 
@@ -1037,8 +1091,7 @@ mark.pai-hl {{ outline:2px solid #2075c7; border-radius:2px; background:#7ee8a2;
   // ── Context-menu PAI keyboard ─────────────────────────────────────────────
   var ctxKbToggle = document.getElementById('ctx-kb-toggle');
   var ctxKbPanel  = document.getElementById('ctx-kb-panel');
-  var CTX_CHARS   = ['ʾ','ʿ','ḥ','ḍ','ṭ','ṯ','ġ','ğ','ž','č','š','ṣ',
-                     'ā','ē','ī','ō','ū','ə','a','e','i','o','u'];
+  var CTX_CHARS   = {ctx_chars_js};
   CTX_CHARS.forEach(function(ch) {{
     var b = document.createElement('button');
     b.className = 'ctx-kc';
