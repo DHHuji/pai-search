@@ -1724,6 +1724,26 @@ check('AP18 the corpus cache is refreshed so the new comment appears',
       'load_corpus_index.clear()' in
       source.split('def append_corpus_comment')[1].split('\ndef ')[0])
 
+# ── unified: ONE comment, in the sheet, exported by every CSV ──
+check('AP19 the session-only comment box is gone',
+      "comment_{r['doc_id']}" not in source
+      and 'Add a comment for this transcription' not in source)
+check('AP20 comment is a metadata column in the main/selected CSVs',
+      "'gender', 'status', 'comment']" in source
+      and "'comment':         'Comment'," in source)
+check('AP21 the feature-browse CSV exports it too',
+      source.count("'gender', 'status', 'comment']") == 2,
+      str(source.count("'gender', 'status', 'comment']")))
+check('AP22 all three CSVs label it "Comment"',
+      source.count("'Comment'") >= 2)
+check('AP23 the selected CSV no longer has its own comment field',
+      '_comment2' not in source)
+# feature-browse metadata now comes from the corpus entry, not the result row,
+# which only ever carried village/community — the rest exported blank
+check('AP24 feature-browse metadata is sourced from the corpus entry',
+      '_fb_corpus_by_id' in source
+      and '_fb_src = _fb_corpus_by_id.get' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

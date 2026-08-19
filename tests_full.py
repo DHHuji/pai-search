@@ -399,18 +399,28 @@ section('8. Selective CSV export -- checkboxes + comment + download button')
 
 check('Checkbox key sel_{doc_id} in results loop',
       "key=f\"sel_{r['doc_id']}\"" in source)
-check('Comment text_input key comment_{doc_id}',
-      "key=f\"comment_{r['doc_id']}\"" in source)
+# The session-only comment box was removed. Comments now live in the sheet's
+# 'comment' column, written under the transcription, so the same text is
+# visible to other researchers and appears in every CSV — the old box was lost
+# on reload and never left the browser tab.
+check('the session-only comment box is gone',
+      "key=f\"comment_{r['doc_id']}\"" not in source)
+check('comments are written to the sheet instead',
+      'def append_corpus_comment' in source
+      and '_render_comment_box' in source)
 check('_sel_ids set built from session_state',
       '_sel_ids' in source and "sel_{" in source)
 check('Download-selected label contains _n_sel count',
       'Download selected ({_n_sel})' in source)
-check('Selected CSV has Comment column',
-      "'Comment'" in source or '"Comment"' in source)
+check('Comment is a normal metadata column in the CSVs',
+      "'comment':         'Comment'," in source)
+check('every CSV exports the same sheet-backed comment',
+      source.count("'comment'") >= 3
+      and "'gender', 'status', 'comment']" in source)
 check('st.columns([1, 20]) for checkbox+expander layout',
       'st.columns([1, 20])' in source)
-check('if _is_sel: shows comment text_input',
-      'if _is_sel:' in source)
+check('the selected-row branch no longer renders a comment box',
+      'Add a comment for this transcription' not in source)
 
 
 # ════════════════════════════════════════════════════════════════════════════

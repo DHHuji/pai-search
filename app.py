@@ -5136,8 +5136,11 @@ if results:
 
     # Metadata keys stored on every corpus entry — automatically includes any
     # new fields added in the future (just keep them in load_corpus_index).
+    # 'comment' is the sheet's own comment column, so every export carries the
+    # same text that is shown and edited under the transcription. There is no
+    # longer a separate session-only comment.
     _META_KEYS = ['village', 'community', 'social_typology', 'geo_typology',
-                  'gender', 'status']
+                  'gender', 'status', 'comment']
     _META_LABELS = {
         'village':         'שם יישוב',
         'community':       'קהילה',
@@ -5145,6 +5148,7 @@ if results:
         'geo_typology':    'Geo Typology',
         'gender':          'מגדר דובר',
         'status':          'Status',
+        'comment':         'Comment',
     }
     # Two columns per feature: the value, and beside it the tagged example word.
     _feat_names_dl = _csv_feature_header()
@@ -5204,7 +5208,7 @@ if results:
     if _n_sel > 0:
         _sel_w2 = csv.writer(_sel_buf)
         _sel_w2.writerow(
-            ['#', 'Document', 'Link', 'Comment', 'Matches', 'Matched words']
+            ['#', 'Document', 'Link', 'Matches', 'Matched words']
             + [_META_LABELS.get(k, k) for k in _META_KEYS]
             + _feat_names_dl
         )
@@ -5217,7 +5221,6 @@ if results:
             _sel_rank2 += 1          # mirrors the rank shown on-screen
             if _r['doc_id'] not in _sel_ids:
                 continue
-            _comment2 = st.session_state.get(f"comment_{_r['doc_id']}", '') or ''
             _words2 = ', '.join(list(dict.fromkeys(
                 _STRIP_MARK.sub('', w) for w in _r.get('matched_words', [])
             )))
@@ -5227,7 +5230,7 @@ if results:
             _srow2 = (_ce2 or {}).get('sheet_row') or _r.get('sheet_row')
             _fv2 = _csv_feature_cells(_srow2, _r['doc_id'])
             _sel_w2.writerow(
-                [_sel_rank2, _r['name'], _link2, _comment2, _r.get('match_count', ''), _words2]
+                [_sel_rank2, _r['name'], _link2, _r.get('match_count', ''), _words2]
                 + _mv2 + _fv2
             )
 
@@ -5415,10 +5418,11 @@ if results:
                         _dv = st.session_state.setdefault('_doc_versions', {})
                         _dv[r['doc_id']] = _dv.get(r['doc_id'], 0) + 1
                         st.rerun()
-        if _is_sel:
-            st.text_input("💬 Comment", key=f"comment_{r['doc_id']}",
-                          placeholder="Add a comment for this transcription…",
-                          label_visibility="collapsed")
+        # NOTE: the session-only comment box that used to sit here has been
+        # removed. Comments are written under the transcription instead and
+        # stored in the sheet's 'comment' column, so the same text appears in
+        # every CSV export and is visible to other researchers — the old box
+        # was lost on reload and never left this browser tab.
 
 # ── Feature browser results ───────────────────────────────────────────────────
 if st.session_state.get('_feat_search') and corpus:
@@ -5580,10 +5584,14 @@ if st.session_state.get('_feat_search') and corpus:
         _fbuf = _io2.StringIO()
         _fw   = _csv_mod.writer(_fbuf)
         # All metadata fields + ALL feature columns (not just the searched ones)
+        # These come from the CORPUS entry, not from the feature-result row:
+        # that row only carries name/village/community, so every other column
+        # here — typology, gender, status — was silently exporting blank.
         _fb_meta_keys   = ['village', 'community', 'social_typology', 'geo_typology',
-                           'gender', 'status']
+                           'gender', 'status', 'comment']
         _fb_meta_labels = ['שם יישוב', 'קהילה', 'Social Typology', 'Geo Typology',
-                           'מגדר דובר', 'Status']
+                           'מגדר דובר', 'Status', 'Comment']
+        _fb_corpus_by_id = {d['doc_id']: d for d in corpus}
         # Two columns per feature: value + the tagged example word beside it
         _all_feat_names = _csv_feature_header()
         _fw.writerow(['#', 'Document', 'Link'] + _fb_meta_labels + _all_feat_names)
@@ -5592,7 +5600,9 @@ if st.session_state.get('_feat_search') and corpus:
         _fb_rank = 0
         for _fr in _feat_rows:
             _fb_rank += 1
-            _fb_meta_vals = [_fr.get(k, '') for k in _fb_meta_keys]
+            _fb_src = _fb_corpus_by_id.get(_fr['doc_id'], _fr)
+            _fb_meta_vals = [_fb_src.get(k, '') or _fr.get(k, '')
+                             for k in _fb_meta_keys]
             # Full feature row + example words (both cached)
             _fb_feat_vals = _csv_feature_cells(_fr.get('sheet_row'), _fr['doc_id'])
             _fw.writerow([
