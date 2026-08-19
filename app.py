@@ -1800,6 +1800,11 @@ COL_NAMES = {
     'community':      'קהילה',
     'gender':         'מגדר דובר',
     'status':         'סטטוס',
+    # Free-text notes written from the app. Resolved by header text like the
+    # rest, so the column can be moved in the sheet without breaking anything.
+    # NOTE: this is the English 'comment' column, deliberately NOT the older
+    # Hebrew 'הערות' column — they are separate.
+    'comment':        'comment',
 }
 
 # ── Status badge colours (mirrors Google Sheets conditional formatting) ────────
@@ -2475,6 +2480,7 @@ def load_corpus_index() -> list[dict]:
             'community':       cell_val(cols['community'])       or '',
             'gender':          cell_val(cols['gender'])          or '',
             'status':          cell_val(cols['status'])          or '',
+            'comment':         cell_val(cols['comment'])         or '',
             'sheet_row':       grid_row_idx,
         })
 
@@ -3187,6 +3193,79 @@ def write_sheet_features(sheet_row: int, changes: dict[str, object]) -> list[str
     return notices
 
 
+COMMENT_SEP = '; '
+
+
+def read_corpus_comment_live(sheet_row: int) -> str:
+    """
+    Read the comment cell STRAIGHT from the sheet, bypassing every cache.
+
+    Used immediately before appending. The corpus index is cached for ten
+    minutes, so a comment another researcher added in a different session
+    during that window would be invisible — and appending to the cached value
+    would overwrite theirs. Reading live costs one small request and is what
+    makes concurrent commenting safe.
+    """
+    cols = get_column_indices()
+    idx = cols.get('comment')
+    if idx is None or not sheet_row:
+        return ''
+    _, _, sheets_svc = get_services()
+    col = _col_letter(idx)
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f'Recordings!{col}{sheet_row}',
+    ).execute()
+    vals = res.get('values') or [[]]
+    return (vals[0][0] if vals and vals[0] else '') or ''
+
+
+def append_corpus_comment(sheet_rows: list, text: str) -> str:
+    """
+    Append a comment to the 'comment' column for a document.
+
+    Existing comments are never replaced — the new text is added after a
+    '; ' separator, so two researchers commenting in different sessions both
+    keep their note. The current value is re-read live first (see
+    read_corpus_comment_live) so a comment written since this page loaded is
+    not clobbered.
+
+    Returns the new full cell value. Raises if the column is missing, rather
+    than silently writing nowhere.
+    """
+    text = (text or '').strip()
+    if not text:
+        return ''
+    if not sheet_rows:
+        raise ValueError('no spreadsheet row for this document')
+
+    cols = get_column_indices()
+    idx = cols.get('comment')
+    if idx is None:
+        raise ValueError(
+            "No column named 'comment' was found in the Recordings sheet. "
+            "Add one (the header must read exactly 'comment') and try again."
+        )
+    col = _col_letter(idx)
+
+    existing = read_corpus_comment_live(sheet_rows[0]).strip()
+    merged = f'{existing}{COMMENT_SEP}{text}' if existing else text
+
+    _, _, sheets_svc = get_services()
+    sheets_svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={'valueInputOption': 'RAW', 'data': [
+            {'range': f'Recordings!{col}{row}', 'values': [[merged]]}
+            for row in sheet_rows
+        ]},
+    ).execute()
+
+    # The corpus index carries the comment, so it has to be refetched for the
+    # new text to show up on screen.
+    load_corpus_index.clear()
+    return merged
+
+
 def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str,
                        only_value: str | None = None):
     """
@@ -3787,6 +3866,53 @@ def search_by_name(query: str, corpus: list[dict]) -> list[dict]:
 # ════════════════════════════════════════════════════════════════════════════════
 #  FEATURE TAGGING PANEL
 # ════════════════════════════════════════════════════════════════════════════════
+
+def _render_comment_box(doc_id: str, doc_name: str, sheet_rows: list,
+                        corpus_entry: dict | None = None):
+    """
+    Free-text comment box shown under a document's transcription.
+
+    Submitting APPENDS to the sheet's 'comment' column rather than replacing
+    it, so comments from different researchers and different sessions
+    accumulate, separated by '; '.
+    """
+    st.markdown("##### 💬 Comment on this transcription")
+
+    existing = (corpus_entry or {}).get('comment', '') or ''
+    if existing:
+        _parts = [c.strip() for c in existing.split(';') if c.strip()]
+        st.markdown(
+            'Already recorded: '
+            + ' '.join(f'<span class="val-chip">{c}</span>' for c in _parts),
+            unsafe_allow_html=True,
+        )
+
+    _key = f'newcomment_{doc_id}'
+    st.text_area(
+        "Comment", key=_key, height=80, label_visibility="collapsed",
+        placeholder="Write anything about this transcription…",
+    )
+    _c1, _c2 = st.columns([1, 4])
+    with _c1:
+        _send = st.button("💾 Submit", key=f'{_key}_go', type="primary",
+                          disabled=not sheet_rows)
+    with _c2:
+        if not sheet_rows:
+            st.caption("No spreadsheet row is linked to this document.")
+
+    if _send:
+        _txt = (st.session_state.get(_key) or '').strip()
+        if not _txt:
+            st.warning("Nothing to submit — the comment is empty.")
+        else:
+            try:
+                _merged = append_corpus_comment(sheet_rows, _txt)
+                st.session_state[_key] = ''
+                st.success(f"✅ Comment saved. This document now reads: {_merged}")
+                st.rerun()
+            except Exception as _ce:
+                st.error(f"Could not save the comment: {_ce}")
+
 
 def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     """
@@ -5263,6 +5389,12 @@ if results:
                 all_rows = doc_id_to_rows.get(r['doc_id'], [r['sheet_row']] if r.get('sheet_row') else [])
                 if all_rows:
                     _render_submit_bar(r['doc_id'], r['name'], all_rows)
+
+                # ── Free-text comment, appended to the sheet ────────────────
+                _ce_for_comment = next(
+                    (d for d in corpus if d['doc_id'] == r['doc_id']), None)
+                _render_comment_box(r['doc_id'], r['name'], all_rows,
+                                    _ce_for_comment)
 
                 _link_col, _reload_col = st.columns([5, 1])
                 with _link_col:

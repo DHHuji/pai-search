@@ -1622,6 +1622,108 @@ for _label, _snippet in [
 check('AO21 nothing iterates FEATURE_HEADER_DEFS to build a UI list',
       source.count('for fd in FEATURE_HEADER_DEFS') == 0)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AP. Free-text comments appended to the corpus')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CELL = {'v': ''}
+def _csvc():
+    _s = mock.MagicMock()
+    def _get(spreadsheetId=None, range=None, **k):
+        return mock.MagicMock(
+            execute=lambda: {'values': [[_CELL['v']]] if _CELL['v'] else []})
+    def _bu(spreadsheetId=None, body=None, **k):
+        for d in body['data']:
+            _CELL['v'] = d['values'][0][0]
+        return mock.MagicMock(execute=lambda: {})
+    _s.spreadsheets.return_value.values.return_value.get = _get
+    _s.spreadsheets.return_value.values.return_value.batchUpdate = _bu
+    return (None, None, _s)
+
+def _add(text, rows=(7,)):
+    with mock.patch.object(app, 'get_services', side_effect=_csvc), \
+         mock.patch.object(app, 'get_column_indices', return_value={'comment': 5}), \
+         mock.patch.object(app.load_corpus_index, 'clear', lambda: None):
+        return app.append_corpus_comment(list(rows), text)
+
+_CELL['v'] = ''
+check('AP1 the first comment is stored as-is', _add('first') == 'first')
+check('AP2 a second comment is APPENDED, not replaced',
+      _add('second') == 'first; second', _CELL['v'])
+check('AP3 a third keeps both earlier ones',
+      _add('third') == 'first; second; third', _CELL['v'])
+check('AP4 the separator is ";" as requested', app.COMMENT_SEP.strip() == ';')
+
+# THE concurrency requirement: a comment written by another session between
+# our page load and our submit must survive.
+_CELL['v'] = 'mine'
+_CELL['v'] = 'mine; written by ANOTHER session'   # someone else wrote meanwhile
+_res = _add('my new note')
+check('AP5 a comment written by another session is not clobbered',
+      'ANOTHER session' in _res, _res)
+check('AP6 ...and ours is appended after it',
+      _res.endswith('my new note'), _res)
+check('AP7 the current value is re-read LIVE before appending',
+      'def read_corpus_comment_live' in source
+      and 'read_corpus_comment_live(sheet_rows[0])' in source)
+check('AP8 the live read bypasses the cached corpus index',
+      'bypassing every cache' in source)
+
+# ── edge cases ──
+_CELL['v'] = 'keep'
+check('AP9 an empty comment writes nothing',
+      _add('   ') == '' and _CELL['v'] == 'keep', _CELL['v'])
+with mock.patch.object(app, 'get_column_indices', return_value={'comment': None}):
+    try:
+        app.append_corpus_comment([7], 'x'); _missing_raises = False
+    except Exception:
+        _missing_raises = True
+check('AP10 a missing comment column raises instead of writing nowhere',
+      _missing_raises)
+try:
+    _add('x', rows=())
+    _norow = False
+except Exception:
+    _norow = True
+check('AP11 a document with no sheet row raises', _norow)
+
+# a document split across rows gets the comment on all of them
+_CELL['v'] = ''
+_written = {}
+def _csvc2():
+    _s = mock.MagicMock()
+    _s.spreadsheets.return_value.values.return_value.get = lambda **k: mock.MagicMock(
+        execute=lambda: {'values': []})
+    def _bu(spreadsheetId=None, body=None, **k):
+        for d in body['data']:
+            _written[d['range']] = d['values'][0][0]
+        return mock.MagicMock(execute=lambda: {})
+    _s.spreadsheets.return_value.values.return_value.batchUpdate = _bu
+    return (None, None, _s)
+with mock.patch.object(app, 'get_services', side_effect=_csvc2), \
+     mock.patch.object(app, 'get_column_indices', return_value={'comment': 5}), \
+     mock.patch.object(app.load_corpus_index, 'clear', lambda: None):
+    app.append_corpus_comment([7, 9], 'split rec')
+check('AP12 a split recording gets the comment on every row',
+      _written == {'Recordings!F7': 'split rec', 'Recordings!F9': 'split rec'},
+      str(_written))
+
+# ── wiring ──
+check('AP13 the comment column is resolved by header text',
+      "'comment':        'comment'," in source)
+check('AP14 it is deliberately NOT the older Hebrew הערות column',
+      'deliberately NOT the older' in source and 'הערות' in source)
+check('AP15 each corpus entry carries its comment',
+      "'comment':         cell_val(cols['comment'])" in source)
+check('AP16 a comment box is rendered under the transcription',
+      'def _render_comment_box' in source
+      and '_render_comment_box(r[\'doc_id\']' in source)
+check('AP17 existing comments are shown before writing a new one',
+      "Already recorded:" in source)
+check('AP18 the corpus cache is refreshed so the new comment appears',
+      'load_corpus_index.clear()' in
+      source.split('def append_corpus_comment')[1].split('\ndef ')[0])
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')
