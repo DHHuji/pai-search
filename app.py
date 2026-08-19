@@ -1857,27 +1857,15 @@ def _status_badge(status: str) -> str:
 FEAT_PREFIXES = ('PHON.', 'MOR.', 'SYN.', 'LEX.')
 
 FEATURE_HEADER_DEFS: list[tuple] = [
+
     ('PHON. aCC > iCC',                       'aCC>iCC',                              'bool',   None),
     ('PHON. Diphthongs',                      'diphthongs',                           'bool',   None),
     ('MOR. Fem. Ending',                      'fem. ending',                          'select', ['-i', '-e', '-a', 'pausal']),
     ('PHON. Med. Imāla',                      'med. Imāla',                           'bool',   None),
-    ('-a+n (Aram. sub.)',                     '-a+n (Aram. sub.)',                    'bool',   None),
-    ('pausal -u>-o#, -i>-e#',                'pausal -u>-o#, -i>-e#',               'bool',   None),
     ('PHON. *ǧ',                              'ج',                                    'select', ['ž', 'ǧ', 'conditioned']),
     ('PHON. *q',                              'ق',                                    'select', ['q', 'ʾ', 'g', 'k', 'g/ǧ/k (conditioned)']),
-    ('assimilation of gutturals to the left', 'assimilation of gutturals to the left','bool',   None),
     ('PHON. Vowel Epen.',                     'vowel epenthesis',                     'select', ['*CCC > CvCC', '*CCC > CCvC']),
-    ('vocal harmonizing',                     'vocal harmonizing',                    'bool',   None),
-    ('lowering of -uC>-oC/-iC>-eC',          'lowering of -uC>-oC/-iC>-eC',         'bool',   None),
     ('MOR. 1Pl Ind. Pron.',                   'independent pronoun 1.pl نحن',         'select', ['niḥna', 'iḥna']),
-    ('3Pl Ind. Pron.',                        'independent pronoun 3.pl هم',          'select', ['hinne/hinne', 'hunne', 'hunni', 'humme/homme', 'hum/hom']),
-    ('2.m.pl pron. كم-',                       '2.m.pl pron. كم-',                     'select', ['-ku/-ko', '-kum/-kom', '-čin']),
-    ('3.m.pl (poss. pro) هم-',                 '3.m.pl (poss. pro) هم-',               'select', ['-h- > -∅- (e.g. -on)', '-hum/-hom', '-hin/-hen']),
-    ('3.f.sg pron. ها-',                       '3.f.sg pron. ها-',                     'select', ['-a', '-a / -ya (after -i-)', '-ha',
-                                                                                                   '-a; -ha only after -ū-',
-                                                                                                   '-a; -ha only after -ū- / -i-', '-hä#/-he#']),
-    ('impf. prefix 3.m.sg',                   'impf. prefix 3.m.sg',                  'select', ['bi-', 'byi-', 'yi-']),
-    ('"want"',                                '"want"',                               'select', ['badd', 'bidd', 'widd']),
     ('LEX. "when?"',                          '"when?"',                              'select', ['ēmta', 'wēnta', 'wagtēš']),
     ('LEX."here"',                            '"here"',                               'select', ['hōn', 'hīn', 'hān', 'hina']),
     ('SYN. Past Con. Mod.',                   'past continuous modifier',             'select', ['kān', 'kān / čān', 'baka~biki / yibki~yibka',
@@ -1886,7 +1874,8 @@ FEATURE_HEADER_DEFS: list[tuple] = [
     ('LEX. "Rooster/Roosters"',               '"rooster/roosters"',                   'select', ['dīk / dyūk']),
     ('LEX. "Heavy"',                          '"heavy"',                              'select', ['tʾīl']),
     ('LEX. "now"',                            '"now"',                               'select', ['issa/hassāʿa', 'hallaʾ/halʾēt/halkēt/halgēt', 'alḥīn']),
-    ('LEX. "Coffee"',                         '"coffee"',                             'select', ['ʾahwi']),
+    ('LEX. "Coffee"',                         '"coffee"',                             'select', ['ʾahwi'])
+
 ]
 
 # Sentinel shown as a selectable value for every 'select'-type feature in
@@ -2040,6 +2029,13 @@ def _feat_value_matches(cell_raw, wanted, options=None) -> bool:
 # into a Google Doc is preserved verbatim on rewrite, instead of being silently
 # dropped — but it can no longer be read from, written to, or tagged via the
 # spreadsheet, since there's nowhere left for it to live.
+# PARSE-PRESERVATION ONLY — never offered as features anywhere in the UI.
+# These names appear in FEATURES blocks of documents written before the prefix
+# convention. The block parser needs to recognise them, because a line it does
+# not recognise is treated as the END of the block: without this list, parsing
+# would stop at the first legacy line and every real feature below it would be
+# dropped on the next rewrite. They are read and carried through verbatim, and
+# are never written afresh, never enter FEATURE_DEFS, and never reach a menu.
 DOC_ONLY_FEATURES: list[str] = [
     '"was"',
     'long particles',
@@ -2339,73 +2335,58 @@ def get_feature_defs() -> list[tuple]:
     Returns 5-tuples: (1-based-idx, col_letter, display_name, type, options).
     """
     headers = _get_sheet_headers()
-    # Build type/options lookup from the static table + user-registered extras
-    known_meta: dict = {
-        ht.strip(): (dt, opts)
-        for ht, _, dt, opts in FEATURE_HEADER_DEFS
-    }
-    for ht, _dn, dt, opts in get_extra_feature_defs():
-        known_meta.setdefault(ht.strip(), (dt, opts))
 
-    # Build a secondary lookup keyed by the name with its FEAT_PREFIX stripped.
-    # This lets a new "LEX. want" column automatically inherit the type/options
-    # from an old "want" entry in FEATURE_HEADER_DEFS or AppFeatureDefs, even
-    # when the exact prefixed name isn't in known_meta yet.
-    def _strip_prefix(s: str) -> str:
-        for p in FEAT_PREFIXES:
-            if s.startswith(p):
-                return s[len(p):].strip()
-        return s
-
-    # Index EVERY known entry by its prefix-stripped name.  Bare entries (which
-    # strip to themselves) are what make the rename case work: a sheet column
-    # renamed from '"want"' to 'LEX. "want"' strips back to '"want"' and finds
-    # the original definition.  Bare entries are inserted last so they win any
-    # tie against an already-prefixed entry that strips to the same name.
-    known_meta_stripped: dict = {}
-    for k, v in known_meta.items():
-        sk = _strip_prefix(k)
-        if sk != k:                      # prefixed entry — index it first
-            known_meta_stripped.setdefault(sk, v)
-    for k, v in known_meta.items():
-        if _strip_prefix(k) == k:        # bare entry — takes precedence
-            known_meta_stripped[k] = v
-
-    # Collect prefix-matching columns in sheet order
-    prefix_cols: list = []   # [(idx, col_letter, ht), ...]
+    # ── ONLY prefixed columns are features, header AND content ───────────────
+    # Everything below is filtered to FEAT_PREFIXES. Legacy columns that
+    # predate the prefix convention must leave no trace anywhere in the app:
+    # not in the tagging popup, not in Browse-by-feature, not in the CSV, and
+    # not as a source of option values for a prefixed column.
+    prefix_cols: list = []   # [(idx, col_letter, header_text), ...]
     for idx, header in enumerate(headers):
         ht = header.strip()
         if any(ht.startswith(p) for p in FEAT_PREFIXES):
             prefix_cols.append((idx, _col_letter(idx), ht))
 
-    # Infer type for columns not resolvable from known_meta (exact or stripped)
-    unknown = tuple(
-        (col, ht) for _, col, ht in prefix_cols
-        if ht not in known_meta and _strip_prefix(ht) not in known_meta_stripped
+    # ── The LIVE sheet is the authority on options ───────────────────────────
+    # _infer_column_types() reads each column's actual data validation, so the
+    # options are whatever the spreadsheet says as of the last fetch.
+    # It is called for EVERY prefixed column, not only unfamiliar ones: when a
+    # hardcoded list was consulted first, a column whose dropdown had since
+    # been rewritten kept serving the stale values forever. LEX. "now" did
+    # exactly that, still offering 'issa/hassāʿa' and 'hallaʾ/halʾēt/halkēt/
+    # halgēt' long after the sheet had been split into separate options.
+    live_meta = _infer_column_types(
+        tuple((col, ht) for _, col, ht in prefix_cols)
     )
-    inferred_meta = _infer_column_types(unknown)
+
+    # ── Hardcoded defs are a LAST RESORT, for columns with no dropdown ───────
+    # Filtered to prefixed names so a legacy entry cannot re-enter this way,
+    # and consulted only when the sheet itself offers nothing.
+    fallback_meta: dict = {
+        ht.strip(): (dt, opts)
+        for ht, _, dt, opts in FEATURE_HEADER_DEFS
+        if any(ht.strip().startswith(p) for p in FEAT_PREFIXES)
+    }
+    for ht, _dn, dt, opts in get_extra_feature_defs():
+        if any(ht.strip().startswith(p) for p in FEAT_PREFIXES):
+            fallback_meta.setdefault(ht.strip(), (dt, opts))
 
     resolved = []
     for idx, col_letter, ht in prefix_cols:
-        dtype, options = (
-            known_meta.get(ht)                          # 1. exact match (e.g. "LEX. want")
-            or known_meta_stripped.get(_strip_prefix(ht))  # 2. prefix-stripped (e.g. "want")
-            or inferred_meta.get(ht)                    # 3. inferred from data / DV rules
-            or ('bool', None)                           # 4. fallback
-        )
+        live = live_meta.get(ht)
+        if live and (live[1] or live[0] == 'bool'):
+            dtype, options = live               # what the sheet says today
+        else:
+            dtype, options = fallback_meta.get(ht) or ('bool', None)
         resolved.append((idx + 1, col_letter, ht, dtype, options))
 
     # Sort alphabetically by feature name. FEATURE_DEFS is the single list every
     # consumer reads from, so ordering it here orders it EVERYWHERE at once —
     # the tagging popup, the Browse-by-feature pickers, the CSV columns and the
-    # FEATURES block written into each document — instead of each site sorting
-    # its own copy and drifting apart.
-    #
+    # FEATURES block written into each document.
     # Because every name carries its category prefix, an alphabetical sort also
     # keeps each category contiguous (LEX. < MOR. < PHON. < SYN.), which is what
     # the document block relies on to emit each group header exactly once.
-    # Sorting by column position, as before, put features in whatever order the
-    # spreadsheet happened to grow in — unfindable once there were 120 of them.
     resolved.sort(key=lambda fd: unicodedata.normalize('NFC', fd[2]).casefold())
     return resolved
 
@@ -3258,29 +3239,6 @@ def delete_feature_tag(doc_id: str, sheet_rows: list[int], col_letter: str,
             pass   # doc update failure is non-critical; spreadsheet already cleared
 
 
-def _build_features_block(sheet_vals: dict, doc_only_vals: dict) -> str:
-    """Build the FEATURES text block to write into the Google Doc."""
-    lines = ['FEATURES:']
-    # O-AO features (from spreadsheet)
-    for fd in FEATURE_DEFS:
-        col_l, name, ftype = fd[1], fd[2], fd[3]
-        val = sheet_vals.get(col_l)
-        if ftype == 'bool':
-            lines.append(f'{name}  [{"+" if val else ""}]')
-        else:
-            lines.append(f'{name}  [{val or ""}]')
-    # Doc-only features
-    for name in DOC_ONLY_FEATURES:
-        val = doc_only_vals.get(name)
-        if isinstance(val, bool):
-            lines.append(f'{name}  [{"+" if val else ""}]')
-        elif val:
-            lines.append(f'{name}  [{val}]')
-        else:
-            lines.append(f'{name}  []')
-    return '\n'.join(lines)
-
-
 def update_gdoc_features_section(
     doc_id: str,
     pending_vals: dict,       # {col_letter: value | None}  — newly tagged features
@@ -3841,14 +3799,11 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     # Initialise session-state slots
     if f"{sk}_pending" not in st.session_state:
         st.session_state[f"{sk}_pending"] = {}
-    if f"{sk}_doc_only" not in st.session_state:
-        st.session_state[f"{sk}_doc_only"] = {}
 
     if f"{sk}_pending_buts" not in st.session_state:
         st.session_state[f"{sk}_pending_buts"] = {}
 
     pending  = st.session_state[f"{sk}_pending"]
-    doc_only = st.session_state[f"{sk}_doc_only"]
     pending_buts = st.session_state[f"{sk}_pending_buts"]
 
     # A word can be staged as a counter-example WITHOUT any value being tagged,
@@ -4038,7 +3993,6 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
     with clr_col:
         if st.button("✕ Clear all", key=f"{sk}_clear_bar", use_container_width=True):
             st.session_state[f"{sk}_pending"] = {}
-            st.session_state[f"{sk}_doc_only"] = {}
             st.session_state[f"{sk}_pending_words"] = {}
             st.session_state[f"{sk}_pending_buts"] = {}
             st.rerun()
@@ -4159,7 +4113,6 @@ def _render_submit_bar(doc_id: str, doc_name: str, sheet_rows: list):
                 st.session_state[f"{sk}_saved_words"] = saved_words
 
                 st.session_state[f"{sk}_pending"] = {}
-                st.session_state[f"{sk}_doc_only"] = {}
                 st.session_state[f"{sk}_pending_words"] = {}
                 st.session_state[f"{sk}_pending_buts"] = {}
                 st.session_state[f"{sk}_confirm"] = False

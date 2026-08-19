@@ -271,14 +271,21 @@ check('B1 exact FEATURE_HEADER_DEFS match -> select',
 check('B1 options from FEATURE_HEADER_DEFS',
       d['LEX. "when?"'][4] == ['ēmta','wēnta','wagtēš'], str(d.get('LEX. "when?"')))
 
-# B2 — THE RENAME CASE: old '"want"' (no prefix) is in FEATURE_HEADER_DEFS.
-#      New column 'LEX. "want"' must inherit its select+options via prefix strip.
-defs = _run_gfd(['x', 'LEX. "want"'])
+# B2 — THE RENAME CASE. A column renamed from '"want"' to 'LEX. "want"' takes
+#      its type and options from the LIVE sheet, NOT from any legacy entry.
+#      Inheriting from the old bare entry is what kept serving stale options
+#      (LEX. "now" offered 'issa/hassāʿa' long after the sheet had changed),
+#      so that path was removed deliberately.
+defs = _run_gfd(['x', 'LEX. "want"'],
+                inferred={'LEX. "want"': ('select', ['badd', 'bidd'])})
 d = {fd[2]: fd for fd in defs}
-check('B2 renamed LEX. "want" inherits type from bare "want"',
+check('B2 a renamed column takes its type from the live sheet',
       d['LEX. "want"'][3] == 'select', str(d.get('LEX. "want"')))
-check('B2 renamed LEX. "want" inherits options',
-      d['LEX. "want"'][4] == ['badd','bidd','widd'], str(d.get('LEX. "want"')))
+check('B2b a renamed column takes its options from the live sheet',
+      d['LEX. "want"'][4] == ['badd', 'bidd'], str(d.get('LEX. "want"')))
+check('B2c legacy bare entries do NOT supply options any more',
+      _run_gfd(['LEX. "want"'], inferred={})[0][4] != ['badd', 'bidd', 'widd'],
+      str(_run_gfd(['LEX. "want"'], inferred={})[0]))
 
 # B3 — prefix-strip must NOT fire when inference already has the exact name
 defs = _run_gfd(['LEX. Brand New'],
@@ -331,12 +338,11 @@ check('B9 whitespace-padded header still matches known def',
 defs = _run_gfd(['LEX.'])
 check('B10 bare prefix header handled without crash', isinstance(defs, list), str(defs))
 
-# B11 — prefix-strip must not cross-contaminate: PHON. X should not pick up
-#       options from an unrelated bare 'X' unless one genuinely exists.
-defs = _run_gfd(['PHON. impf. prefix 3.m.sg'])
+# B11 — a prefixed column must NOT pick up a legacy bare entry's options.
+defs = _run_gfd(['PHON. impf. prefix 3.m.sg'], inferred={})
 d = {fd[2]: fd for fd in defs}
-check('B11 PHON.-prefixed version of a bare known feature inherits its options',
-      d['PHON. impf. prefix 3.m.sg'][4] == ['bi-','byi-','yi-'],
+check('B11 a prefixed column does not inherit a legacy entry\'s options',
+      d['PHON. impf. prefix 3.m.sg'][4] != ['bi-', 'byi-', 'yi-'],
       str(d.get('PHON. impf. prefix 3.m.sg')))
 
 # B12 — features come back alphabetically, whatever order the sheet grew in
@@ -359,16 +365,18 @@ def _spy(unknown):
     seen['cols'] = unknown
     return {}
 with mock.patch.object(app, '_get_sheet_headers',
-                       return_value=['LEX. "when?"', 'LEX. "want"', 'SYN. Mystery']), \
+                       return_value=['LEX. "when?"', 'LEX. "want"', 'SYN. Mystery',
+                                     'not a feature']), \
      mock.patch.object(app, 'get_extra_feature_defs', return_value=[]), \
      mock.patch.object(app, '_infer_column_types', side_effect=_spy):
     app.get_feature_defs()
 sent = [ht for _, ht in seen.get('cols', ())]
-check('B13 known column not sent for inference', 'LEX. "when?"' not in sent, str(sent))
-check('B13 prefix-inheritable column not sent for inference',
-      'LEX. "want"' not in sent, str(sent))
-check('B13 genuinely unknown column IS sent for inference',
-      'SYN. Mystery' in sent, str(sent))
+# EVERY prefixed column is asked about now. Consulting the hardcoded table
+# first is what let a column keep serving options the sheet no longer had.
+check('B13 every prefixed column is sent for live inference',
+      set(sent) == {'LEX. "when?"', 'LEX. "want"', 'SYN. Mystery'}, str(sent))
+check('B13b non-prefixed columns are never sent',
+      'not a feature' not in sent, str(sent))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -439,15 +447,16 @@ check('E1 before rename: "want" invisible to the app',
       [fd[2] for fd in before] == [], str([fd[2] for fd in before]))
 
 # Sheet AFTER renaming the SAME column (same position -> same letter/data).
-after = _run_gfd(['קהילה', 'LEX. "want"', 'סטטוס'])
+after = _run_gfd(['קהילה', 'LEX. "want"', 'סטטוס'],
+                 inferred={'LEX. "want"': ('select', ['badd', 'bidd'])})
 d = {fd[2]: fd for fd in after}
 check('E2 after rename: column discovered', 'LEX. "want"' in d, str(list(d)))
 check('E3 after rename: same column letter B (data preserved)',
       d['LEX. "want"'][1] == 'B', str(d.get('LEX. "want"')))
-check('E4 after rename: type inherited as select',
+check('E4 after rename: type comes from the live sheet',
       d['LEX. "want"'][3] == 'select', str(d.get('LEX. "want"')))
-check('E5 after rename: options inherited',
-      d['LEX. "want"'][4] == ['badd','bidd','widd'], str(d.get('LEX. "want"')))
+check('E5 after rename: options come from the live sheet',
+      d['LEX. "want"'][4] == ['badd', 'bidd'], str(d.get('LEX. "want"')))
 check('E6 rename invalidates the feature-value cache',
       tuple((fd[1], fd[2]) for fd in before) != tuple((fd[1], fd[2]) for fd in after))
 

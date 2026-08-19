@@ -318,35 +318,22 @@ check('T9 decomposed ḏ̣ matches composed ḏ̣',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-section('U. _build_features_block — doc FEATURES text')
+section('U. The legacy FEATURES-block writer is gone')
 # ══════════════════════════════════════════════════════════════════════════════
 
-_saved = app.FEATURE_DEFS
-app.FEATURE_DEFS = [
-    (1, 'A', 'PHON. Flag',  'bool',   None),
-    (2, 'B', 'LEX. "want"', 'select', ['badd', 'bidd']),
-]
-try:
-    blk = app._build_features_block({'A': True, 'B': 'bidd'}, {})
-    check('U1 block starts with the FEATURES: heading', blk.startswith('FEATURES:'), blk)
-    check('U2 a true bool renders as [+]',   'PHON. Flag  [+]' in blk, blk)
-    check('U3 a select renders its value',   'LEX. "want"  [bidd]' in blk, blk)
-
-    blk = app._build_features_block({'A': False, 'B': None}, {})
-    check('U4 a false bool renders as an empty bracket',
-          'PHON. Flag  []' in blk, blk)
-    check('U5 an untagged select renders as an empty bracket',
-          'LEX. "want"  []' in blk, blk)
-
-    blk = app._build_features_block({}, {})
-    check('U6 missing values do not crash', 'FEATURES:' in blk, blk)
-    check('U7 every feature gets a line',
-          blk.count('\n') >= 2, repr(blk))
-    # Names in the block must be the FULL prefixed names the parser looks for
-    check('U8 lines use the full prefixed name (parser contract)',
-          'PHON. Flag' in blk and 'LEX. "want"' in blk, blk)
-finally:
-    app.FEATURE_DEFS = _saved
+# _build_features_block() rebuilt the whole block from scratch, including a
+# pass that re-emitted DOC_ONLY_FEATURES — the pre-prefix legacy names. It was
+# never called, so it was dead code that could only ever reintroduce old
+# feature names into a document. Removed.
+check('U1 the legacy block writer no longer exists',
+      not hasattr(app, '_build_features_block'))
+check('U2 nothing references it', '_build_features_block' not in source)
+check('U3 the document block is written only by update_gdoc_features_section',
+      hasattr(app, 'update_gdoc_features_section'))
+check('U4 no code path re-emits DOC_ONLY_FEATURES',
+      'for name in DOC_ONLY_FEATURES:' not in source)
+check('U5 legacy names are still RECOGNISED when parsing, so old lines survive',
+      'set(DOC_ONLY_FEATURES)' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1543,6 +1530,97 @@ for _opt in app.DOC_TABLE_OPTIONS['LEX. "Rooster/Roosters"']:
     _dd, _uu = app.derive_phon_from_table({'LEX. "Rooster/Roosters"': _opt})
     check(f'AN15 rooster option {_opt} yields a reflex',
           'PHON. *k' in _dd and not _uu, f'{_dd} {_uu}')
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AO. Only prefixed columns — name AND content, from the live sheet')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_P = app.FEAT_PREFIXES
+_bad = lambda n: not any(str(n).startswith(p) for p in _P)
+
+# ── no legacy column can enter through a static table ──
+check('AO1 FEATURE_HEADER_DEFS holds only prefixed names',
+      not [t[0] for t in app.FEATURE_HEADER_DEFS if _bad(t[0])],
+      str([t[0] for t in app.FEATURE_HEADER_DEFS if _bad(t[0])]))
+check('AO2 the document-table map targets only prefixed features',
+      not [v for v in app.DOC_TABLE_FEATURE_MAP.values() if _bad(v)])
+check('AO3 the document-table option lists are keyed by prefixed features',
+      not [k for k in app.DOC_TABLE_OPTIONS if _bad(k)])
+check('AO4 the *q rule columns are prefixed',
+      not [k for k in app.Q_GLOTTAL_OPTIONS if _bad(k)])
+
+# ── the LIVE sheet wins over any hardcoded list ──
+_HDRS = ['Village', '"want"', 'LEX. "want"', 'vocal harmonizing',
+         'PHON. *q', 'impf. prefix 3.m.sg', 'LEX. "now"']
+_NEW_NOW = ['hallaʾ', 'halgēt', 'halkēt', 'halʾēt', '(h)alḥīn',
+            'hassa', 'issa', 'hassāʿ', 'haʾʾēte']
+_LIVE = {'LEX. "want"': ('select', ['badd', 'bidd']),
+         'PHON. *q':    ('select', ['q', 'ʾ', 'g']),
+         'LEX. "now"':  ('select', _NEW_NOW)}
+with mock.patch.object(app, '_get_sheet_headers', return_value=_HDRS), \
+     mock.patch.object(app, 'get_extra_feature_defs',
+                       return_value=[('legacy old', 'x', 'select', ['zzz'])]), \
+     mock.patch.object(app, '_infer_column_types', return_value=_LIVE):
+    _defs = app.get_feature_defs()
+_names = [fd[2] for fd in _defs]
+_byname = {fd[2]: fd for fd in _defs}
+
+check('AO5 legacy sheet columns are NOT discovered',
+      not [n for n in _names if _bad(n)], str(_names))
+check('AO6 a bare legacy column is absent even when a prefixed twin exists',
+      '"want"' not in _names and 'LEX. "want"' in _names, str(_names))
+check('AO7 a legacy AppFeatureDefs entry cannot re-enter',
+      'legacy old' not in _names, str(_names))
+
+# THE reported bug: LEX. "now" served the old hardcoded options forever
+check('AO8 options come from the LIVE sheet, not the hardcoded table',
+      _byname['LEX. "now"'][4] == _NEW_NOW, str(_byname['LEX. "now"'][4]))
+check('AO9 the stale hardcoded "now" values are gone',
+      'issa/hassāʿa' not in (_byname['LEX. "now"'][4] or [])
+      and 'hallaʾ/halʾēt/halkēt/halgēt' not in (_byname['LEX. "now"'][4] or []))
+check('AO10 inference is asked about EVERY prefixed column, not just unknown ones',
+      'live_meta = _infer_column_types(' in source
+      and 'tuple((col, ht) for _, col, ht in prefix_cols)' in source)
+check('AO11 the hardcoded table is only a fallback',
+      'fallback_meta' in source and 'if live and' in source)
+check('AO12 the fallback is itself filtered to prefixed names',
+      'if any(ht.strip().startswith(p) for p in FEAT_PREFIXES)' in source)
+
+# a column the sheet knows nothing about still falls back, and still only if prefixed
+with mock.patch.object(app, '_get_sheet_headers',
+                       return_value=['PHON. Diphthongs', 'old col']), \
+     mock.patch.object(app, 'get_extra_feature_defs', return_value=[]), \
+     mock.patch.object(app, '_infer_column_types', return_value={}):
+    _d2 = app.get_feature_defs()
+check('AO13 a column with no live dropdown still resolves',
+      [fd[2] for fd in _d2] == ['PHON. Diphthongs'], str([fd[2] for fd in _d2]))
+
+# ── the prefix-stripped inheritance that resurrected old options is gone ──
+check('AO14 the legacy prefix-stripped lookup is removed',
+      'known_meta_stripped' not in source)
+check('AO15 the dead legacy block writer is removed',
+      '_build_features_block' not in source)
+check('AO16 the vestigial doc_only state is removed',
+      '_doc_only' not in source)
+
+# ── DOC_ONLY_FEATURES may exist for parsing, but must never surface ──
+check('AO17 DOC_ONLY_FEATURES never enters FEATURE_DEFS',
+      not (set(app.DOC_ONLY_FEATURES) & set(_names)), str(app.DOC_ONLY_FEATURES))
+check('AO18 DOC_ONLY_FEATURES is used only for parsing, never written',
+      'for name in DOC_ONLY_FEATURES:' not in source)
+check('AO19 its parse-only purpose is documented',
+      'PARSE-PRESERVATION ONLY' in source)
+
+# ── every UI list is built from FEATURE_DEFS, which is prefix-filtered ──
+for _label, _snippet in [
+    ('the tagging popup',        "{'name': fd[2], 'type': fd[3], 'opts': fd[4] or []}"),
+    ('Browse-by-feature groups', '[fd[2] for fd in FEATURE_DEFS if fd[2].startswith(_gprefix)]'),
+    ('the CSV header',           'for fd in FEATURE_DEFS'),
+    ('the name lookup',          '_FEAT_BY_NAME: dict = {fd[2]: fd for fd in FEATURE_DEFS}'),
+]:
+    check(f'AO20 {_label} is built from FEATURE_DEFS', _snippet in source)
+check('AO21 nothing iterates FEATURE_HEADER_DEFS to build a UI list',
+      source.count('for fd in FEATURE_HEADER_DEFS') == 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
