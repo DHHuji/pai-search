@@ -1799,6 +1799,121 @@ check('AQ12 a disabled button still reads as disabled',
 check('AQ13 the reason is recorded for whoever touches this next',
       'Streamlit wraps the label in' in source)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AR. Feature cheat sheet')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CS_DEFS = [
+    (1, 'A', 'LEX. "want"',      'select', ['badd', 'bidd']),
+    (2, 'B', 'MOR. Fem. Ending', 'select', ['-i', '-e', '-a']),
+    (3, 'C', 'PHON. Diphthongs', 'bool',   None),
+    (4, 'D', 'SYN. Never Tagged','select', ['x', 'y']),
+]
+def _csdoc(*lines):
+    return ('<html><body><p>FEATURES:</p>'
+            + ''.join(f'<p>{l}</p>' for l in lines) + '</body></html>')
+_CS_DOCS = {
+    'd1': _csdoc('LEX. "want"  [biddi ašrab]   bidd',
+                 'MOR. Fem. Ending  [arḍiyye]   -e'),
+    'd2': _csdoc('LEX. "want"  [w-bidd-i]   bidd',
+                 'PHON. Diphthongs  [bayt; ʿayn]   +'),
+    'd3': _csdoc('MOR. Fem. Ending  [madrase]   -a'),
+}
+_CS_SHEET = {1: {'A': 'bidd', 'B': '-e'}, 2: {'A': 'bidd', 'C': True},
+             3: {'B': '-a'}}
+_cs_corpus = [{'doc_id': k, 'name': k.upper(), 'sheet_row': i + 1}
+              for i, k in enumerate(_CS_DOCS)]
+
+_saved = app.FEATURE_DEFS
+app.FEATURE_DEFS = _CS_DEFS
+try:
+    with mock.patch.object(app, 'get_doc_content',
+                           side_effect=lambda d, v=0: {'display_html': _CS_DOCS[d]}), \
+         mock.patch.object(app, 'get_sheet_features',
+                           side_effect=lambda r: _CS_SHEET.get(r, {})):
+        _rows = app.build_feature_cheatsheet(_cs_corpus)
+    _by = {r['feature']: r for r in _rows}
+
+    check('AR1 EVERY feature gets a row',
+          len(_rows) == len(_CS_DEFS), str(len(_rows)))
+    check('AR2 rows follow FEATURE_DEFS order',
+          [r['feature'] for r in _rows] == [fd[2] for fd in _CS_DEFS])
+    check('AR3 a tagged feature carries a real example word',
+          'biddi ašrab' in _by['LEX. "want"']['examples'],
+          str(_by['LEX. "want"']))
+    check('AR4 examples are collected across documents',
+          'w-bidd-i' in _by['LEX. "want"']['examples'],
+          str(_by['LEX. "want"']['examples']))
+    check('AR5 examples from different documents are combined',
+          'arḍiyye' in _by['MOR. Fem. Ending']['examples']
+          and 'madrase' in _by['MOR. Fem. Ending']['examples'],
+          str(_by['MOR. Fem. Ending']['examples']))
+    check('AR6 a bool feature gets its example words too',
+          'bayt' in _by['PHON. Diphthongs']['examples'],
+          str(_by['PHON. Diphthongs']['examples']))
+
+    # THE requested behaviour for an untagged feature
+    check('AR7 a feature with no tagging is still listed',
+          'SYN. Never Tagged' in _by)
+    check('AR8 ...with an EMPTY example cell',
+          _by['SYN. Never Tagged']['examples'] == '',
+          repr(_by['SYN. Never Tagged']['examples']))
+    check('AR9 ...and empty value/document cells, not junk',
+          _by['SYN. Never Tagged']['value'] == ''
+          and _by['SYN. Never Tagged']['document'] == '')
+
+    # context columns
+    check('AR10 the tagged value is reported beside the example',
+          _by['MOR. Fem. Ending']['value'] == '-e',
+          str(_by['MOR. Fem. Ending']['value']))
+    check('AR11 the source document is named',
+          _by['LEX. "want"']['document'] == 'D1',
+          str(_by['LEX. "want"']['document']))
+    check('AR12 the feature type is included',
+          _by['PHON. Diphthongs']['type'] == 'bool')
+    check('AR13 the option list is included',
+          _by['MOR. Fem. Ending']['options'] == '-i | -e | -a',
+          str(_by['MOR. Fem. Ending']['options']))
+
+    # the cap is honoured
+    with mock.patch.object(app, 'get_doc_content',
+                           side_effect=lambda d, v=0: {'display_html': _CS_DOCS[d]}), \
+         mock.patch.object(app, 'get_sheet_features',
+                           side_effect=lambda r: _CS_SHEET.get(r, {})):
+        _one = app.build_feature_cheatsheet(_cs_corpus, max_examples=1)
+    _b1 = {r['feature']: r for r in _one}
+    check('AR14 max_examples caps how many words are collected',
+          ';' not in _b1['LEX. "want"']['examples'],
+          str(_b1['LEX. "want"']['examples']))
+    check('AR15 the cap still yields at least one example',
+          _b1['LEX. "want"']['examples'] != '')
+
+    # robustness
+    with mock.patch.object(app, 'get_doc_content', side_effect=RuntimeError('x')), \
+         mock.patch.object(app, 'get_sheet_features', return_value={}):
+        _safe = app.build_feature_cheatsheet(_cs_corpus)
+    check('AR16 unreadable documents do not crash the build',
+          len(_safe) == len(_CS_DEFS)
+          and all(r['examples'] == '' for r in _safe))
+    check('AR17 an empty corpus still lists every feature',
+          len(app.build_feature_cheatsheet([])) == len(_CS_DEFS))
+finally:
+    app.FEATURE_DEFS = _saved
+
+# ── UI wiring ──
+check('AR18 there is a cheat-sheet button in the sidebar',
+      'Feature cheat sheet' in source and 'cheat_build' in source)
+check('AR19 it produces a downloadable CSV',
+      'pai_feature_cheatsheet.csv' in source)
+check('AR20 Feature and Example are the first two columns',
+      "['Feature', 'Example word(s)'," in source)
+check('AR21 it reports how many features have no example yet',
+      'never tagged' in source and '_missing' in source)
+check('AR22 building shows progress, since it reads documents',
+      'Collecting example words' in source)
+check('AR23 it stops early once every feature has its quota',
+      'no point reading further' in source)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

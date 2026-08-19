@@ -2948,6 +2948,71 @@ def canonicalise_table_value(value: str, options: list) -> str | None:
     return None
 
 
+def build_feature_cheatsheet(corpus: list, max_examples: int = 3,
+                             progress=None) -> list:
+    """
+    One row per feature: what it is, and a real tagged word showing it in use.
+
+    EVERY feature in FEATURE_DEFS gets a row, including ones nothing has been
+    tagged with — those come back with empty example cells rather than being
+    omitted, so the sheet doubles as a list of what still needs work.
+
+    Example words live in each document's FEATURES block, so this reads the
+    documents (from the cache the search already filled) and stops as soon as
+    every feature has its quota, which on a well-tagged corpus is long before
+    the end.
+    """
+    examples: dict = {}      # feature -> [(word, value, doc_name), ...]
+    versions = dict(st.session_state.get('_doc_versions', {}))
+    col_set  = tuple((fd[1], fd[2]) for fd in FEATURE_DEFS)
+    wanted   = {fd[2] for fd in FEATURE_DEFS}
+
+    seen = set()
+    docs = [d for d in corpus if not (d['doc_id'] in seen or seen.add(d['doc_id']))]
+
+    for i, doc in enumerate(docs):
+        if progress:
+            progress(i + 1, len(docs), doc.get('name', ''))
+        # every feature already has its quota — no point reading further
+        if wanted and all(len(examples.get(f, [])) >= max_examples for f in wanted):
+            break
+        try:
+            ann = get_doc_feature_annotations(
+                doc['doc_id'], versions.get(doc['doc_id'], 0), col_set) or {}
+        except Exception:
+            continue
+        if not ann:
+            continue
+        try:
+            vals = get_sheet_features(doc['sheet_row']) or {}
+        except Exception:
+            vals = {}
+
+        for fd in FEATURE_DEFS:
+            got = examples.setdefault(fd[2], [])
+            if len(got) >= max_examples:
+                continue
+            words = (ann.get(fd[2]) or {}).get('example', '')
+            for w in [x.strip() for x in re.split(r'[;,]', words) if x.strip()]:
+                if len(got) >= max_examples:
+                    break
+                got.append((w, vals.get(fd[1]), doc.get('name', '')))
+
+    rows = []
+    for fd in FEATURE_DEFS:
+        got = examples.get(fd[2], [])
+        rows.append({
+            'feature':  fd[2],
+            'type':     fd[3],
+            'options':  ' | '.join(fd[4]) if fd[4] else '',
+            'examples': '; '.join(w for w, _v, _d in got),
+            'value':    next((str(v) for _w, v, _d in got
+                              if v not in (None, '', False)), ''),
+            'document': got[0][2] if got else '',
+        })
+    return rows
+
+
 def scan_auto_tags(corpus: list, progress=None) -> dict:
     """
     Read every document's transcription table and work out what could be tagged.
@@ -4356,6 +4421,50 @@ if corpus and not st.session_state.get('_preload_started'):
     _preload_thread.start()
 
 with st.sidebar:
+    # ── Feature cheat sheet ───────────────────────────────────────────────────
+    with st.expander("📋  Feature cheat sheet"):
+        st.caption(
+            "Downloads a CSV listing every feature in the corpus alongside a "
+            "real tagged word showing it in use. Features nothing has been "
+            "tagged with come out with an empty example — so the sheet doubles "
+            "as a list of what still needs work."
+        )
+        if st.button("🔍  Build cheat sheet", key="cheat_build", disabled=not corpus):
+            _cbar = st.progress(0.0, text="Collecting example words…")
+            def _ctick(i, n, name):
+                _cbar.progress(i / max(n, 1), text=f"{i}/{n}  ·  {name[:26]}")
+            st.session_state['_cheatsheet'] = build_feature_cheatsheet(
+                corpus, progress=_ctick)
+            _cbar.empty()
+
+        _cs = st.session_state.get('_cheatsheet')
+        if _cs:
+            _with = sum(1 for r in _cs if r['examples'])
+            st.markdown(
+                f"**{len(_cs)}** features  \n"
+                f"✅ **{_with}** with an example  \n"
+                f"⬜ **{len(_cs) - _with}** never tagged"
+            )
+            import csv as _c3, io as _i3
+            _cb = _i3.StringIO()
+            _cw = _c3.writer(_cb)
+            _cw.writerow(['Feature', 'Example word(s)', 'Type',
+                          'Options', 'Value tagged', 'Seen in document'])
+            for _r in _cs:
+                _cw.writerow([_r['feature'], _r['examples'], _r['type'],
+                              _r['options'], _r['value'], _r['document']])
+            st.download_button(
+                "⬇  Download cheat sheet (CSV)",
+                _cb.getvalue().encode('utf-8-sig'),
+                file_name="pai_feature_cheatsheet.csv", mime="text/csv",
+                key="cheat_dl",
+            )
+            _missing = [r['feature'] for r in _cs if not r['examples']]
+            if _missing:
+                with st.expander(f"⬜ {len(_missing)} features with no example yet"):
+                    for _mf in _missing[:60]:
+                        st.caption(_mf)
+
     # ── Auto-tag from the transcription tables ────────────────────────────────
     # Preview first, apply second: this touches up to 778 rows and there is no
     # undo, so nothing is written until the proposals have been looked at.
