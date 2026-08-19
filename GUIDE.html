@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAI Corpus Search — מדריך שימוש</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sky-50:#f0f8ff; --sky-100:#daeeff; --sky-200:#b8deff; --sky-400:#60aee8;
+  --sky-600:#2075c7; --sky-800:#0d3f75; --ink:#1a2b3c; --muted:#5b6b7c;
+  --warn-bg:#fff8e0; --warn-br:#ffe082; --warn-tx:#7a5f00;
+  --ok-bg:#e8f5e9; --ok-br:#a5d6a7; --ok-tx:#1b5e20;
+  --bad-bg:#ffebee; --bad-br:#ef9a9a; --bad-tx:#b71c1c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Heebo,Arial,sans-serif;background:var(--sky-50);color:var(--ink);
+     line-height:1.75;padding:0 0 60px}
+.mono,code,kbd{font-family:'IBM Plex Mono',monospace;direction:ltr;unicode-bidi:embed;
+     display:inline-block;text-align:left}
+header{background:linear-gradient(135deg,var(--sky-800),var(--sky-600));color:#fff;
+     padding:38px 26px 30px;text-align:center}
+header h1{font-size:2rem;font-weight:800;letter-spacing:.02em}
+header p{opacity:.9;margin-top:6px;font-size:1rem}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+
+/* ── tabs ── */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:22px 0 0;padding:0 20px;
+     max-width:1080px;margin-inline:auto}
+.tab{background:var(--sky-100);border:1.5px solid var(--sky-200);border-bottom:none;
+     border-radius:12px 12px 0 0;padding:9px 16px;cursor:pointer;font-weight:600;
+     font-size:.92rem;color:var(--sky-800);transition:background .15s;user-select:none}
+.tab:hover{background:var(--sky-200)}
+.tab.active{background:#fff;border-color:var(--sky-400);color:var(--sky-600);
+     box-shadow:0 -2px 6px rgba(32,117,199,.08)}
+.panel{display:none;background:#fff;border:1.5px solid var(--sky-200);border-radius:0 14px 14px 14px;
+     padding:26px 28px;max-width:1080px;margin:0 auto 30px;
+     box-shadow:0 2px 14px rgba(13,63,117,.06)}
+.panel.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+h2{font-size:1.45rem;color:var(--sky-800);margin:4px 0 14px;font-weight:800}
+h3{font-size:1.1rem;color:var(--sky-600);margin:26px 0 10px;font-weight:600;
+   border-bottom:2px solid var(--sky-100);padding-bottom:5px}
+h4{font-size:.98rem;color:var(--ink);margin:18px 0 7px;font-weight:600}
+p{margin:9px 0}
+ul,ol{margin:9px 26px 9px 0;padding-inline-start:6px}
+li{margin:5px 0}
+
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:.92rem}
+th{background:var(--sky-100);color:var(--sky-800);text-align:right;padding:8px 12px;
+   border-bottom:2px solid var(--sky-200);font-weight:600}
+td{padding:7px 12px;border-bottom:1px solid #e6eef7;vertical-align:top}
+tr:hover td{background:#fafcff}
+
+.note,.warn,.ok,.bad{border-radius:10px;padding:12px 16px;margin:14px 0;font-size:.94rem}
+.note{background:var(--sky-50);border:1.5px solid var(--sky-200)}
+.warn{background:var(--warn-bg);border:1.5px solid var(--warn-br);color:var(--warn-tx)}
+.ok{background:var(--ok-bg);border:1.5px solid var(--ok-br);color:var(--ok-tx)}
+.bad{background:var(--bad-bg);border:1.5px solid var(--bad-br);color:var(--bad-tx)}
+.note b,.warn b,.ok b,.bad b{font-weight:700}
+
+pre{background:#1c2b3a;color:#e8f1fa;border-radius:10px;padding:14px 16px;overflow-x:auto;
+    direction:ltr;text-align:left;font-family:'IBM Plex Mono',monospace;font-size:.86rem;
+    line-height:1.6;margin:12px 0}
+pre .c{color:#7fb3d5}
+code{background:var(--sky-100);color:var(--sky-800);border-radius:5px;padding:1px 6px;font-size:.9em}
+kbd{background:#fff;border:1.5px solid var(--sky-200);border-bottom-width:3px;border-radius:6px;
+    padding:1px 8px;font-size:.86em;color:var(--sky-800)}
+
+figure{margin:16px 0;text-align:center}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:7px;font-style:italic}
+svg{max-width:100%;height:auto}
+
+.pill{display:inline-block;background:var(--sky-100);border:1px solid var(--sky-200);
+      border-radius:999px;padding:1px 11px;margin:2px;font-family:'IBM Plex Mono',monospace;
+      font-size:.85rem;color:var(--sky-800);direction:ltr}
+.steps{counter-reset:s;list-style:none;margin-inline-start:0}
+.steps li{counter-increment:s;position:relative;padding-inline-start:38px;margin:12px 0}
+.steps li::before{content:counter(s);position:absolute;inset-inline-start:0;top:1px;
+  width:26px;height:26px;border-radius:50%;background:var(--sky-600);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem}
+.toc{background:var(--sky-50);border:1.5px solid var(--sky-200);border-radius:10px;
+     padding:12px 18px;margin:14px 0;font-size:.92rem}
+footer{text-align:center;color:var(--muted);font-size:.85rem;padding:26px 20px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PAI Corpus Search</h1>
+  <p>מדריך שימוש מלא לממשק החיפוש והתיוג של קורפוס הערבית הפלסטינית</p>
+</header>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-t="start">התחלה</div>
+  <div class="tab" data-t="search">חיפוש בתעתיקים</div>
+  <div class="tab" data-t="root">חיפוש לפי שורש</div>
+  <div class="tab" data-t="feat">חיפוש לפי פיצ׳ר</div>
+  <div class="tab" data-t="tag">תיוג</div>
+  <div class="tab" data-t="but">חריגים (BUT)</div>
+  <div class="tab" data-t="edit">עריכה ומחיקה</div>
+  <div class="tab" data-t="comment">הערות</div>
+  <div class="tab" data-t="csv">ייצוא CSV</div>
+  <div class="tab" data-t="auto">תיוג אוטומטי</div>
+  <div class="tab" data-t="side">סרגל הצד</div>
+  <div class="tab" data-t="trouble">פתרון בעיות</div>
+</div>
+
+<!-- ═══════════════════════════ התחלה ═══════════════════════════ -->
+<div class="panel active" id="p-start">
+  <h2>מה זה ואיך זה בנוי</h2>
+  <p>
+    הממשק מחפש בתוך תמלילי הקורפוס, מאפשר לתייג בהם תופעות לשוניות, ומייצא את
+    התוצאות. הנתונים יושבים בשני מקומות ש<b>מסונכרנים ביניהם</b>:
+  </p>
+  <table>
+    <tr><th style="width:32%">איפה</th><th>מה נמצא שם</th></tr>
+    <tr><td><b>Google Sheets</b> — גיליון <code>Recordings</code></td>
+        <td>שורה לכל הקלטה: מטא-דאטה (יישוב, קהילה, מגדר, סטטוס), קישור לתמליל, וכל <b>ערכי הפיצ׳רים</b></td></tr>
+    <tr><td><b>Google Docs</b> — מסמך לכל תמליל</td>
+        <td>התמליל עצמו, ובסופו בלוק <code>FEATURES:</code> שמכיל את התיוגים <b>יחד עם המילים שתויגו</b></td></tr>
+  </table>
+  <div class="note">
+    <b>למה בשני מקומות?</b> הגיליון מחזיק את <i>הערך</i> (למשל <code>-e</code>), והמסמך
+    מחזיק את <i>הראיה</i> — המילה הממשית שבגללה תייגת כך (למשל <code>arḍiyye</code>).
+    בלי המסמך היית יודע מה תויג אבל לא למה.
+  </div>
+
+  <h3>מבנה המסך</h3>
+  <figure>
+    <svg viewBox="0 0 840 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="סכמת מסך">
+      <rect x="0" y="0" width="840" height="300" rx="10" fill="#f0f8ff" stroke="#b8deff"/>
+      <rect x="14" y="14" width="150" height="272" rx="8" fill="#fff" stroke="#60aee8"/>
+      <text x="89" y="38" font-size="13" text-anchor="middle" fill="#0d3f75" font-family="Heebo">סרגל צד</text>
+      <text x="89" y="62" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">📚 קורפוס</text>
+      <text x="89" y="82" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">📋 Cheat sheet</text>
+      <text x="89" y="102" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">🤖 תיוג אוטומטי</text>
+      <text x="89" y="122" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">↺ ניקוי cache</text>
+
+      <rect x="178" y="14" width="648" height="34" rx="8" fill="#daeeff" stroke="#60aee8"/>
+      <text x="502" y="36" font-size="12" text-anchor="middle" fill="#0d3f75" font-family="Heebo">בורר מצב: תעתיקים · שורש · מסמך · פיצ׳ר</text>
+
+      <rect x="178" y="56" width="648" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/>
+      <text x="502" y="74" font-size="11" text-anchor="middle" fill="#7a5f00" font-family="Heebo">מקרא ה-wildcards</text>
+
+      <rect x="178" y="90" width="530" height="36" rx="9" fill="#fff" stroke="#2075c7" stroke-width="2"/>
+      <text x="443" y="113" font-size="12" text-anchor="middle" fill="#5b6b7c" font-family="'IBM Plex Mono'">^aCC</text>
+      <rect x="716" y="90" width="52" height="36" rx="9" fill="#daeeff" stroke="#60aee8"/>
+      <text x="742" y="113" font-size="11" text-anchor="middle" fill="#0d3f75">⌨ PAI</text>
+      <rect x="774" y="90" width="52" height="36" rx="9" fill="#2075c7"/>
+      <text x="800" y="113" font-size="11" text-anchor="middle" fill="#fff">Search</text>
+
+      <rect x="178" y="134" width="648" height="26" rx="6" fill="#fff" stroke="#b8deff"/>
+      <text x="502" y="152" font-size="11" text-anchor="middle" fill="#0d3f75" font-family="Heebo">⚙️ אפשרויות מתקדמות · פילטרים</text>
+
+      <rect x="178" y="170" width="648" height="116" rx="8" fill="#fff" stroke="#b8deff"/>
+      <text x="502" y="192" font-size="12" text-anchor="middle" fill="#0d3f75" font-family="Heebo">תוצאות — כל תוצאה נפתחת לתמליל מלא</text>
+      <rect x="192" y="204" width="620" height="30" rx="6" fill="#f0f8ff" stroke="#daeeff"/>
+      <text x="502" y="223" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">#1 · 📄 Ġǧ.1F.R3 · 4 matches</text>
+      <rect x="192" y="240" width="620" height="30" rx="6" fill="#f0f8ff" stroke="#daeeff"/>
+      <text x="502" y="259" font-size="10.5" text-anchor="middle" fill="#5b6b7c" font-family="Heebo">#2 · 📄 Ml.2FC.R2 · 2 matches</text>
+    </svg>
+    <figcaption>סכמת המסך — איור, לא צילום מסך</figcaption>
+  </figure>
+
+  <h3>ארבעת מצבי החיפוש</h3>
+  <table>
+    <tr><th style="width:26%">מצב</th><th>מתי להשתמש</th></tr>
+    <tr><td>🔍 <b>Search transcriptions</b></td><td>חיפוש תבנית פונולוגית בתוך התמלילים</td></tr>
+    <tr><td>🔡 <b>Root search</b></td><td>חיפוש שורש שמי — האותיות בסדר, עם כל דבר ביניהן</td></tr>
+    <tr><td>📄 <b>Find document</b></td><td>איתור מסמך לפי שם או מזהה</td></tr>
+    <tr><td>🏷️ <b>Browse by feature</b></td><td>אילו מסמכים תויגו בפיצ׳ר מסוים</td></tr>
+  </table>
+  <div class="warn">
+    <b>כפתור אחד לחיפוש.</b> בכל ארבעת המצבים החיפוש מופעל מכפתור <b>Search</b>
+    שבשורת החיפוש. אין כפתור נפרד למצב פיצ׳רים.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ חיפוש ═══════════════════════════ -->
+<div class="panel" id="p-search">
+  <h2>חיפוש בתעתיקים</h2>
+  <p>מקלידים תבנית ולוחצים <b>Search</b>. התבנית מורכבת מתווים רגילים ומ־wildcards.</p>
+
+  <h3>טבלת ה-wildcards</h3>
+  <table>
+    <tr><th style="width:12%">תו</th><th style="width:26%">משמעות</th><th>מכיל</th></tr>
+    <tr><td><span class="pill">C</span></td><td>כל עיצור</td><td class="mono">b t ṯ ǧ ž ḥ x d ḏ r z s š ṣ ḍ ẓ ṭ ġ f q g k č ḳ l m n h w y ʿ ʾ p ḅ ṃ ḷ ṛ ḏ̣</td></tr>
+    <tr><td><span class="pill">V</span></td><td>כל תנועה</td><td class="mono">a e i o u ə ā ē ī ō ū ā̈</td></tr>
+    <tr><td><span class="pill">v</span></td><td>תנועה קצרה</td><td class="mono">a e i o u ə</td></tr>
+    <tr><td><span class="pill">v̄</span></td><td>תנועה ארוכה</td><td class="mono">ā ē ī ō ū ā̈</td></tr>
+    <tr><td><span class="pill">D</span></td><td>דיפתונג</td><td class="mono">aw ay ōw ēy</td></tr>
+    <tr><td><span class="pill">G</span></td><td>גרוני</td><td class="mono">h x ḥ ʿ ġ q</td></tr>
+    <tr><td><span class="pill">E</span></td><td>מודגש</td><td class="mono">ḍ ḏ̣ ẓ ṣ</td></tr>
+    <tr><td><span class="pill">B</span></td><td>בילביאלי</td><td class="mono">b ḅ m ṃ f</td></tr>
+    <tr><td><span class="pill">L</span></td><td>למנ״ר</td><td class="mono">l ḷ m ṃ r ṛ n</td></tr>
+    <tr><td><span class="pill">$</span></td><td>כל תו, כל אורך (גם אפס)</td><td>—</td></tr>
+    <tr><td><span class="pill">^</span></td><td>תחילת מילה</td><td>עוגן</td></tr>
+    <tr><td><span class="pill">#</span></td><td>סוף מילה</td><td>עוגן</td></tr>
+  </table>
+  <div class="note">
+    ה-wildcards הנפוצים מוצגים תמיד; השאר מוסתרים מאחורי
+    <b>▸ more wildcards &amp; groups</b> כדי לא להעמיס. פתיחתו לא מרעננת את הדף.
+  </div>
+
+  <h3>דוגמאות</h3>
+  <table>
+    <tr><th style="width:22%">תבנית</th><th>מה היא מוצאת</th></tr>
+    <tr><td><span class="pill">^aCC</td><td>מילה שמתחילה ב-a ואחריו שני עיצורים</td></tr>
+    <tr><td><span class="pill">VCC#</td><td>מילה שמסתיימת בתנועה + שני עיצורים</td></tr>
+    <tr><td><span class="pill">f$m</td><td>f, אחריו כל דבר, ואז m — באותה מילה</td></tr>
+    <tr><td><span class="pill">^G</td><td>מילה שמתחילה בעיצור גרוני</td></tr>
+    <tr><td><span class="pill">BvL</td><td>בילביאלי, תנועה קצרה, למנ״ר — למשל <span class="mono">bal</span></td></tr>
+  </table>
+
+  <h3>קבוצות אלטרנטיבה</h3>
+  <p>סוגריים עם פסיקים = <b>אחד מהערכים</b>. שימושי לרפלקסים שונים של אותו עיצור:</p>
+  <pre>(q,ʾ)tb      <span class="c">→ qtb או ʾtb</span>
+(q,ʾ,k,ḳ,g,ǧ) <span class="c">→ כל הרפלקסים של ق</span>
+(q,k,)tb     <span class="c">→ qtb, ktb, וגם tb — פסיק בסוף = האות אופציונלית</span></pre>
+  <div class="ok">
+    <b>הפסיק הסופי</b> הוא הטריק השימושי ביותר כאן: הוא הופך את האות לאופציונלית,
+    כך שאפשר למצוא גם צורות שבהן העיצור נשמט לגמרי.
+  </div>
+
+  <h3>רצף מילים</h3>
+  <p>רווח בתבנית = <b>גבול מילה</b>. שתי תבניות מופרדות ברווח מחפשות שתי מילים <b>עוקבות</b>:</p>
+  <pre>g# ^G   <span class="c">→ מילה שנגמרת ב-g, ומיד אחריה מילה שמתחילה בגרוני</span></pre>
+
+  <h3>מקלדת PAI</h3>
+  <p>
+    כפתור <kbd>⌨ PAI</kbd> ליד שורת החיפוש פותח מקלדת עם כל התווים המיוחדים
+    (<span class="mono">ʾ ʿ ḥ ḍ ṭ ṯ ġ ǧ ž č š ṣ ḏ ḏ̣ ⁱ</span>), העיצורים הרגילים,
+    התנועות, וכפתורי ה-wildcards. לחיצה מכניסה את התו במקום הסמן.
+  </p>
+  <figure>
+    <svg viewBox="0 0 700 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="מקלדת PAI">
+      <rect x="0" y="0" width="700" height="130" rx="10" fill="#f0f8ff" stroke="#b8deff"/>
+      <text x="18" y="22" font-size="10" fill="#60aee8" font-family="'IBM Plex Mono'">WILDCARDS</text>
+      <g font-family="'IBM Plex Mono'" font-size="12" text-anchor="middle">
+        <g>
+          <rect x="14" y="28" width="34" height="26" rx="6" fill="#e3f2fd" stroke="#90caf9"/><text x="31" y="46" fill="#1565c0">^</text>
+          <rect x="52" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="69" y="46" fill="#7a5f00">C</text>
+          <rect x="90" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="107" y="46" fill="#7a5f00">V</text>
+          <rect x="128" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="145" y="46" fill="#7a5f00">v</text>
+          <rect x="166" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="183" y="46" fill="#7a5f00">v̄</text>
+          <rect x="204" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="221" y="46" fill="#7a5f00">G</text>
+          <rect x="242" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="259" y="46" fill="#7a5f00">E</text>
+          <rect x="280" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="297" y="46" fill="#7a5f00">B</text>
+          <rect x="318" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="335" y="46" fill="#7a5f00">L</text>
+          <rect x="356" y="28" width="34" height="26" rx="6" fill="#fff8e0" stroke="#ffe082"/><text x="373" y="46" fill="#7a5f00">$</text>
+          <rect x="394" y="28" width="34" height="26" rx="6" fill="#e3f2fd" stroke="#90caf9"/><text x="411" y="46" fill="#1565c0">#</text>
+        </g>
+        <g>
+          <rect x="14" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="29" y="82" fill="#6a1b9a">ʾ</text>
+          <rect x="48" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="63" y="82" fill="#6a1b9a">ʿ</text>
+          <rect x="82" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="97" y="82" fill="#6a1b9a">ḥ</text>
+          <rect x="116" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="131" y="82" fill="#6a1b9a">ḍ</text>
+          <rect x="150" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="165" y="82" fill="#6a1b9a">ṭ</text>
+          <rect x="184" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="199" y="82" fill="#6a1b9a">ṯ</text>
+          <rect x="218" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="233" y="82" fill="#6a1b9a">ġ</text>
+          <rect x="252" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="267" y="82" fill="#6a1b9a">ǧ</text>
+          <rect x="286" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="301" y="82" fill="#6a1b9a">č</text>
+          <rect x="320" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="335" y="82" fill="#6a1b9a">š</text>
+          <rect x="354" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="369" y="82" fill="#6a1b9a">ṣ</text>
+          <rect x="388" y="64" width="30" height="26" rx="6" fill="#f3e5f5" stroke="#ce93d8"/><text x="403" y="82" fill="#6a1b9a">ḏ̣</text>
+        </g>
+        <g>
+          <rect x="14" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="28" y="115" fill="#1a2b3c">ā</text>
+          <rect x="46" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="60" y="115" fill="#1a2b3c">ē</text>
+          <rect x="78" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="92" y="115" fill="#1a2b3c">ī</text>
+          <rect x="110" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="124" y="115" fill="#1a2b3c">ō</text>
+          <rect x="142" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="156" y="115" fill="#1a2b3c">ū</text>
+          <rect x="174" y="98" width="28" height="24" rx="6" fill="#fff" stroke="#b8deff"/><text x="188" y="115" fill="#1a2b3c">ə</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption>מקלדת ה-PAI — איור סכמטי</figcaption>
+  </figure>
+
+  <h3>מיקום ופילטרים</h3>
+  <p>ב-<b>⚙️ Advanced options</b>:</p>
+  <ul>
+    <li><b>מיקום בתוך המילה</b> — Anywhere / Start / Middle / End</li>
+    <li><b>פילטרים</b> — יישוב, טיפולוגיה גיאוגרפית וחברתית, קהילה, מגדר, סטטוס</li>
+  </ul>
+  <div class="warn">
+    <b>פילטרים פעילים נשארים פעילים.</b> כשיש פילטר דלוק מופיע באנר כחול מעל
+    הפאנל עם פירוט מה מסונן וכפתור <b>✕ Clear</b>. אם חיפוש מחזיר פחות תוצאות
+    מהצפוי — זה המקום הראשון להסתכל בו.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ שורש ═══════════════════════════ -->
+<div class="panel" id="p-root">
+  <h2>חיפוש לפי שורש</h2>
+  <p>
+    מזינים את אותיות השורש והממשק מוסיף <span class="pill">$</span> בין כל אות —
+    כלומר מחפש את האותיות <b>בסדר הזה</b> עם כל דבר ביניהן.
+  </p>
+  <pre>ktb   <span class="c">→ $k$t$b$   מוצא: kataba, kitāb, maktūb…</span>
+k t b <span class="c">→ אותו דבר, רווחים מותרים</span></pre>
+
+  <h3>שורש עם רפלקסים שונים</h3>
+  <p>אם לאות יש כמה מימושים אפשריים בדיאלקטים שונים, אפשר לתת קבוצה:</p>
+  <pre>(q,ʾ,k,ḳ,g,ǧ)tl  <span class="c">→ מוצא qtl וגם ʾtl וגם ktl…</span>
+(q,k,)tb         <span class="c">→ ובנוסף גם tb, בלי העיצור בכלל</span></pre>
+
+  <h3>טבלת התאמות שימושית</h3>
+  <table>
+    <tr><th style="width:18%">אות</th><th style="width:34%">מתממשת כ־</th><th>בחיפוש</th></tr>
+    <tr><td>ق q</td><td class="mono">q, ʾ, k, ḳ, g, ǧ</td><td><span class="mono">(q,ʾ,k,ḳ,g,ǧ)</span></td></tr>
+    <tr><td>ج ǧ</td><td class="mono">ǧ, ž</td><td><span class="mono">(ǧ,ž)</span></td></tr>
+    <tr><td>ذ ḏ</td><td class="mono">d, z</td><td><span class="mono">(ḏ,d,z)</span></td></tr>
+    <tr><td>ث ṯ</td><td class="mono">t, s</td><td><span class="mono">(ṯ,t,s)</span></td></tr>
+    <tr><td>ظ ḏ̣</td><td class="mono">ḍ, ẓ</td><td><span class="mono">(ḏ̣,ḍ,ẓ)</span></td></tr>
+    <tr><td>ك k</td><td class="mono">k, č</td><td><span class="mono">(k,č)</span></td></tr>
+  </table>
+  <div class="note">
+    הטבלה הזו זמינה גם בתוך הממשק, ב-<b>📖 Common letter correspondences</b>.
+  </div>
+  <div class="ok">
+    בחיפוש שורש המיקום תמיד <b>anywhere</b> — ה-<span class="pill">$</span> כבר
+    מטפל בזה, ולכן בורר המיקום מושבת במצב הזה.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ פיצ'ר ═══════════════════════════ -->
+<div class="panel" id="p-feat">
+  <h2>חיפוש לפי פיצ׳ר</h2>
+  <p>מוצא מסמכים לפי מה שתויג בהם, לא לפי הטקסט.</p>
+
+  <h3>איך בוחרים</h3>
+  <ol class="steps">
+    <li>בוחרים מצב <b>🏷️ Browse by feature</b></li>
+    <li>הפיצ׳רים מחולקים לארבע קטגוריות — 🔊 Phonology · 🧩 Morphology · 🔗 Syntax · 📖 Lexicon.
+        בוחרים פיצ׳ר אחד או יותר מכל קטגוריה.</li>
+    <li>לכל פיצ׳ר נפתח בורר ערכים. <b>אם משאירים אותו ריק — זה אומר "כל ערך"</b>,
+        כלומר כל מסמך שתויג בפיצ׳ר הזה במשהו.</li>
+    <li>אם בחרת יותר מפיצ׳ר אחד — בוחרים <b>AND</b> (חייב את כולם) או <b>OR</b> (מספיק אחד)</li>
+    <li>לוחצים <b>Search</b></li>
+  </ol>
+  <div class="ok">
+    <b>ריק = כל ערך.</b> בחירת פיצ׳ר בלי לבחור ערך היא דרך מהירה לשאול
+    "אילו מסמכים בכלל תויגו בפיצ׳ר הזה".
+  </div>
+
+  <h3>ערכים מיוחדים</h3>
+  <table>
+    <tr><th style="width:34%">בחירה</th><th>משמעות</th></tr>
+    <tr><td>(ריק)</td><td>כל מסמך שתויג בפיצ׳ר, בכל ערך</td></tr>
+    <tr><td><b>— None (not tagged) —</b></td><td>דווקא מסמכים ש<b>לא</b> תויגו בפיצ׳ר הזה</td></tr>
+    <tr><td>כמה ערכים יחד</td><td>מסמך מתאים אם יש לו <b>אחד מהם</b></td></tr>
+    <tr><td>⚠️ Only documents that have a BUT</td><td>רק מסמכים שיש להם דוגמה נגדית לפיצ׳ר</td></tr>
+  </table>
+
+  <h3>ריבוי ערכים</h3>
+  <div class="note">
+    פיצ׳ר יכול להחזיק <b>כמה ערכים בו-זמנית</b> — למשל
+    <code>MOR. Fem. Ending = -e, -a</code> — כי חוקרים שונים תייגו רפלקסים שונים
+    באותו מסמך. חיפוש של <code>-e</code> ימצא מסמך כזה, וכך גם חיפוש של <code>-a</code>.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ תיוג ═══════════════════════════ -->
+<div class="panel" id="p-tag">
+  <h2>תיוג</h2>
+  <p>
+    התיוג נעשה <b>מתוך התמליל</b>: מסמנים את המילה שמדגימה את התופעה, לוחצים
+    קליק ימני, ובוחרים את הפיצ׳ר. כך המילה נשמרת כדוגמה יחד עם התיוג.
+  </p>
+
+  <h3>התהליך</h3>
+  <ol class="steps">
+    <li>פותחים תוצאה כדי לראות את התמליל</li>
+    <li><b>מסמנים את המילה</b> בעכבר</li>
+    <li><b>קליק ימני</b> — נפתח תפריט</li>
+    <li>בוחרים קטגוריה ← פיצ׳ר ← ערך (לפיצ׳ר בוליאני מספיק קליק על שם הפיצ׳ר)</li>
+    <li>התג נשמר כ״ממתין״; חוזרים על 2–4 לכל תיוג נוסף</li>
+    <li>בסוף לוחצים <b>✅ Yes, submit</b> — הכל נכתב לגיליון ולמסמך יחד</li>
+  </ol>
+
+  <figure>
+    <svg viewBox="0 0 660 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="תפריט ימני">
+      <rect x="0" y="0" width="660" height="250" rx="10" fill="#f7fbff" stroke="#b8deff"/>
+      <text x="20" y="26" font-size="12" fill="#5b6b7c" font-family="'IBM Plex Mono'">…w-<tspan fill="#0d4a22" font-weight="700">bidd</tspan>-i ašrab ʾahwe…</text>
+      <rect x="150" y="40" width="230" height="196" rx="11" fill="#1c1c1e"/>
+      <text x="164" y="60" font-size="9.5" fill="#aaa" font-family="'IBM Plex Mono'">TAG: "bidd"</text>
+      <line x1="150" y1="68" x2="380" y2="68" stroke="#333"/>
+      <rect x="160" y="76" width="210" height="22" rx="6" fill="#2c2c2e" stroke="#444"/>
+      <text x="168" y="91" font-size="10" fill="#777" font-family="Heebo">🔎 search features…</text>
+      <g font-family="'IBM Plex Mono'" font-size="11">
+        <text x="168" y="118" fill="#60aee8">⊛</text><text x="186" y="118" fill="#f2f2f7">PHON.</text><text x="352" y="118" fill="#666" text-anchor="end">32 ▸</text>
+        <text x="168" y="140" fill="#60aee8">⊛</text><text x="186" y="140" fill="#f2f2f7">MOR.</text><text x="352" y="140" fill="#666" text-anchor="end">41 ▸</text>
+        <text x="168" y="162" fill="#60aee8">⊛</text><text x="186" y="162" fill="#f2f2f7">SYN.</text><text x="352" y="162" fill="#666" text-anchor="end">33 ▸</text>
+        <rect x="156" y="170" width="218" height="22" rx="5" fill="rgba(255,255,255,.09)"/>
+        <text x="168" y="185" fill="#60aee8">⊛</text><text x="186" y="185" fill="#f2f2f7">LEX.</text><text x="352" y="185" fill="#666" text-anchor="end">16 ▸</text>
+        <line x1="156" y1="198" x2="374" y2="198" stroke="#333"/>
+        <text x="168" y="216" fill="#fbbf24">⚠</text><text x="186" y="216" fill="#fbbf24">BUT — exception</text><text x="352" y="216" fill="#666" text-anchor="end">▸</text>
+      </g>
+      <rect x="390" y="150" width="180" height="70" rx="10" fill="#1c1c1e"/>
+      <g font-family="'IBM Plex Mono'" font-size="11">
+        <text x="404" y="172" fill="#f2f2f7">LEX. "want"</text><text x="556" y="172" fill="#7ee8a2" text-anchor="end">✓ ▸</text>
+        <text x="404" y="196" fill="#f2f2f7">LEX. "Coffee"</text><text x="556" y="196" fill="#666" text-anchor="end">▸</text>
+      </g>
+    </svg>
+    <figcaption>התפריט הימני — איור סכמטי</figcaption>
+  </figure>
+
+  <h3>חיפוש פיצ׳ר בתפריט</h3>
+  <div class="ok">
+    בראש התפריט יש שדה חיפוש. אפשר להקליד <b>בלי הקידומת</b> —
+    <code>want</code> ימצא את <code>LEX. "want"</code>. אפשר גם לחפש לפי <b>ערך</b>:
+    הקלדת <code>bidd</code> תמצא את הפיצ׳ר שמכיל אותו.
+  </div>
+
+  <h3>סימוני ✓</h3>
+  <p>
+    ליד פיצ׳ר שכבר תויג במסמך מופיע <b>✓</b>, ולידו מספר אם יש כמה ערכים.
+    בתוך רשימת הערכים, ערך שכבר קיים מסומן גם הוא — כך רואים למה מוסיפים.
+  </p>
+
+  <h3>ריבוי ערכים — כלום לא נדרס</h3>
+  <div class="note">
+    בחירת ערך שני לאותו פיצ׳ר <b>מוסיפה</b> אותו לראשון ולא מחליפה אותו:
+    <pre>חוקר א׳ תייג:  -e
+חוקר ב׳ תייג:  -a
+בגיליון:       -e, -a</pre>
+    אחרי השמירה תופיע הודעה שמפרטת מה נוסף לצד מה.
+  </div>
+
+  <h3>מה נשמר איפה</h3>
+  <table>
+    <tr><th style="width:26%">איפה</th><th>מה נכתב</th></tr>
+    <tr><td>גיליון</td><td>הערך בלבד — <code>bidd</code></td></tr>
+    <tr><td>מסמך</td><td>שורה בבלוק <code>FEATURES:</code> עם הערך <b>והמילה</b></td></tr>
+  </table>
+  <pre>FEATURES:
+LEX.
+LEX. "want"  [biddi ašrab]   bidd
+             <span class="c">↑ המילה שסימנת    ↑ הערך</span></pre>
+</div>
+
+<!-- ═══════════════════════════ BUT ═══════════════════════════ -->
+<div class="panel" id="p-but">
+  <h2>חריגים — BUT</h2>
+  <p>
+    לפעמים פיצ׳ר קיים בטקסט, אבל <b>מילים מסוימות מראות שהוא לא חל עליהן</b>.
+    זו טענה שונה מ״הפיצ׳ר לא קיים״, ולכן יש לה מנגנון נפרד.
+  </p>
+  <div class="note">
+    <b>דוגמה.</b> בטקסט שבו <code>*q</code> מתממש כ-<code>ʾ</code> באופן עקבי, מופיעה
+    מילה בודדת עם <code>q</code> — למשל שאילה מהערבית הספרותית. זו לא עדות לכך
+    שהפיצ׳ר לא קיים; זו <b>חריגה</b> שכדאי לתעד.
+  </div>
+
+  <h3>איך מתייגים</h3>
+  <ol class="steps">
+    <li>מסמנים את המילה החריגה</li>
+    <li>קליק ימני ← <b>⚠ BUT — exception</b></li>
+    <li>בוחרים קטגוריה ← פיצ׳ר. <b>קליק אחד מספיק</b> — אין בחירת ערך, כי המילה עצמה היא התג.</li>
+    <li>שולחים כרגיל</li>
+  </ol>
+  <div class="ok">
+    יש גם קיצור: בתוצאות חיפוש פיצ׳ר בתפריט מופיע <b>⚠ mark as BUT</b> מתחת לכל פיצ׳ר.
+  </div>
+
+  <h3>איך זה נראה במסמך</h3>
+  <pre>LEX. "want"  [biddi ašrab]   bidd   BUT [widdi, waddi]
+                                     <span class="c">↑ החריגים</span></pre>
+  <p>גם חריגים <b>מצטברים</b> — שני חוקרים יכולים לתעד חריגות שונות ושתיהן יישמרו.</p>
+
+  <h3>איפה זה מופיע</h3>
+  <ul>
+    <li><b>בתוצאות</b> — כ-chip כתום ליד הפיצ׳ר</li>
+    <li><b>ב-CSV</b> — עמודה <code>&lt;feature&gt; — BUT</code></li>
+    <li><b>בחיפוש</b> — צ׳קבוקס <b>⚠️ Only documents that have a BUT</b></li>
+  </ul>
+  <div class="warn">
+    הסינון הזה <b>מצמצם תוצאות של חיפוש פיצ׳רים קיים</b> ולא מהווה חיפוש עצמאי.
+    קודם בוחרים פיצ׳ר, ואז מסמנים את הצ׳קבוקס.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ עריכה ═══════════════════════════ -->
+<div class="panel" id="p-edit">
+  <h2>עריכה ומחיקה</h2>
+
+  <h3>תיקון מילה בתמליל</h3>
+  <ol class="steps">
+    <li>מסמנים את המילה השגויה</li>
+    <li>קליק ימני — בראש התפריט יש שדה <b>✏️ Replace word</b></li>
+    <li>מקלידים את הצורה הנכונה (יש מקלדת PAI בכפתור <kbd>⌨ PAI chars</kbd>)</li>
+    <li>לוחצים <kbd>↵</kbd></li>
+  </ol>
+  <div class="warn">
+    <b>רק המופע שסימנת</b> מוחלף — לא כל המופעים במסמך. אם הטקסט השתנה מאז
+    שהדף נטען, תופיע הודעה שמבקשת לרענן במקום להחליף במקום הלא נכון.
+  </div>
+
+  <h3>מחיקת תיוג</h3>
+  <p>ב-<b>🗑️ Remove existing tags</b> שמתחת לתמליל:</p>
+  <table>
+    <tr><th style="width:30%">מה רוצים</th><th>איך</th></tr>
+    <tr><td>למחוק <b>ערך אחד</b> מתוך כמה</td><td>🗑️ ליד אותו ערך — השאר נשארים</td></tr>
+    <tr><td>למחוק את <b>כל הפיצ׳ר</b></td><td><b>🗑️ all</b> שמופיע כשיש יותר מערך אחד</td></tr>
+    <tr><td>פיצ׳ר בוליאני</td><td>🗑️ יחיד — יש רק מצב אחד</td></tr>
+  </table>
+  <pre>לפני:       -e, -a, -i
+מוחקים -a:  -e, -i
+</pre>
+  <div class="note">
+    אישור המחיקה אומר <b>מה יישאר</b> — ״the document stays tagged <code>-e</code>״ —
+    או מזהיר כשזה הערך האחרון והפיצ׳ר ייעלם כולו, כולל השורה במסמך.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ הערות ═══════════════════════════ -->
+<div class="panel" id="p-comment">
+  <h2>הערות חופשיות</h2>
+  <p>
+    מתחת לכל תמליל יש תיבת טקסט חופשי. מה שנכתב בה נשמר לעמודה
+    <code>comment</code> בגיליון.
+  </p>
+  <ol class="steps">
+    <li>כותבים בתיבה שמתחת לתמליל</li>
+    <li>לוחצים <b>💾 Submit</b></li>
+  </ol>
+
+  <h3>הערות מצטברות</h3>
+  <pre>חוקר א׳:  speaker hesitates at 2:14
+חוקר ב׳:  speaker hesitates at 2:14; check the ʾ here
+חוקר ג׳:  speaker hesitates at 2:14; check the ʾ here; poor audio</pre>
+  <div class="ok">
+    <b>גם בין סשנים מקבילים.</b> לפני כל כתיבה הממשק קורא את התא <b>מחדש מהגיליון</b>,
+    כך שהערה שחוקר אחר כתב בינתיים לא נמחקת. הערות קיימות מוצגות מעל התיבה.
+  </div>
+  <div class="note">
+    ההערה יורדת גם ב<b>כל</b> קובצי ה-CSV, בעמודה <code>Comment</code>.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ CSV ═══════════════════════════ -->
+<div class="panel" id="p-csv">
+  <h2>ייצוא CSV</h2>
+  <table>
+    <tr><th style="width:32%">כפתור</th><th>מה מקבלים</th></tr>
+    <tr><td>⬇ Download results</td><td>כל תוצאות החיפוש</td></tr>
+    <tr><td>⬇ Download selected</td><td>רק תוצאות שסימנת בצ׳קבוקס</td></tr>
+    <tr><td>⬇ Download feature results</td><td>תוצאות חיפוש לפי פיצ׳ר</td></tr>
+    <tr><td>⬇ Download cheat sheet</td><td>טבלת הפיצ׳רים והדוגמאות (בסרגל הצד)</td></tr>
+  </table>
+
+  <h3>העמודות</h3>
+  <p>לכל פיצ׳ר <b>שלוש</b> עמודות צמודות:</p>
+  <table>
+    <tr><th>MOR. Fem. Ending</th><th>MOR. Fem. Ending — example</th><th>MOR. Fem. Ending — BUT</th></tr>
+    <tr><td class="mono">-e, -a</td><td class="mono">arḍiyye</td><td class="mono"></td></tr>
+  </table>
+  <ul>
+    <li><b>הערך</b> — מהגיליון</li>
+    <li><b>example</b> — המילה שתויגה, מתוך המסמך</li>
+    <li><b>BUT</b> — מילים חריגות, אם יש</li>
+  </ul>
+
+  <h3>⚠️ ריק מול FALSE</h3>
+  <div class="warn">
+    עמודות בוליאניות מייצאות <b><code>TRUE</code> או ריק בלבד</b>, אף פעם לא
+    <code>FALSE</code>.<br><br>
+    הסיבה: אלה <b>צ׳קבוקסים</b> ב-Google Sheets, וצ׳קבוקס לא מסומן מאחסן
+    <code>FALSE</code> ליטרלי — זו ברירת המחדל של העמודה ולא שיפוט של חוקר.
+    בקורפוס, 33 מתוך 36 עמודות הצ׳קבוקס היו <code>FALSE</code> בכל 778 השורות
+    בלי אף <code>TRUE</code>. ייצוא שלהן היה ממלא כל קובץ באלפי שליליים
+    חסרי משמעות שנקראים כממצאים.
+  </div>
+  <div class="note">
+    <b>אם צריך פיצ׳ר תלת-מצבי אמיתי</b> (כן / לא / לא נבדק) — יש להגדיר לו
+    עמודת <b>dropdown</b> עם אופציה מפורשת ״no״, לא צ׳קבוקס.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ אוטומטי ═══════════════════════════ -->
+<div class="panel" id="p-auto">
+  <h2>תיוג אוטומטי מטבלאות התעתיק</h2>
+  <p>בראש כל מסמך תעתיק יש טבלה שהחוקר ממלא מרשימות סגורות:</p>
+  <pre>يقول   | ديك \ ديوك | ثقيل | قهوة   | الآن
+biʾūl  | dīk-dyūk   | tʾīl | Select | Select
+                            <span class="c">↑ "Select" = לא מולא</span></pre>
+
+  <h3>מה נגזר מהטבלה</h3>
+  <table>
+    <tr><th style="width:20%">עמודה</th><th>פיצ׳ר בקורפוס</th></tr>
+    <tr><td>يقول</td><td><code>LEX. "He is saying"</code></td></tr>
+    <tr><td>ديك \ ديوك</td><td><code>LEX. "Rooster/Roosters"</code></td></tr>
+    <tr><td>ثقيل</td><td><code>LEX. "Heavy"</code></td></tr>
+    <tr><td>قهوة</td><td><code>LEX. "Coffee"</code></td></tr>
+    <tr><td>الآن</td><td><code>LEX. "now"</code></td></tr>
+  </table>
+
+  <h4>ובנוסף — שני פיצ׳רים נגזרים</h4>
+  <table>
+    <tr><th style="width:52%">תנאי</th><th>מסקנה</th></tr>
+    <tr><td><code>biʾūl</code> <b>וגם</b> <code>ʾahwe/i</code> <b>וגם</b> <code>tʾīl</code>/<code>ṯʾīl</code></td>
+        <td><code>PHON. *q = ʾ</code></td></tr>
+    <tr><td><code>dīk / dyūk</code></td><td><code>PHON. *k = k</code></td></tr>
+    <tr><td><code>dīč / dyūč</code></td><td><code>PHON. *k = č</code></td></tr>
+    <tr><td><code>dīč / dyūk</code></td><td><code>PHON. *k = k~č</code></td></tr>
+  </table>
+  <div class="note">
+    חוק 1 דורש את <b>שלוש</b> העדויות יחד. אם אחת מהן <code>Select</code> — לא נגזר כלום.
+  </div>
+
+  <h3>התהליך</h3>
+  <ol class="steps">
+    <li>בסרגל הצד: <b>🤖 Auto-tag from document tables</b></li>
+    <li><b>🔍 Scan documents</b> — קורא את כל המסמכים. <b>לא כותב כלום.</b></li>
+    <li>בודקים את התצוגה המקדימה ומורידים את ה-CSV</li>
+    <li><b>✍️ Apply</b> ואז אישור — רק אז נכתב לגיליון</li>
+  </ol>
+
+  <h3>מה הסריקה מדווחת</h3>
+  <table>
+    <tr><th style="width:34%">קטגוריה</th><th>משמעות</th></tr>
+    <tr><td>✅ cells to fill</td><td>תאים ריקים שימולאו</td></tr>
+    <tr><td>⚠️ conflicts</td><td>תא שכבר מכיל ערך <b>אחר</b> — <b>מדולג</b> ומדווח</td></tr>
+    <tr><td>🔧 dropdown options to add</td><td>ערך שקיים בטבלה אבל לא ב-dropdown של העמודה</td></tr>
+    <tr><td>📄 no table</td><td>מסמכים בלי טבלה קריאה</td></tr>
+  </table>
+
+  <div class="warn">
+    <b>אי-התאמות ב-dropdown.</b> אם התבנית כותבת <code>ʾahwe/i</code> אבל ה-dropdown
+    בגיליון מציע רק <code>ʾahwi</code> — הערך <b>לא נכתב</b>, כדי שהתא לא ייכשל
+    ב-validation. הדיווח נקרא כרשימת משימות:
+    <pre>🔧 2 dropdown option(s) to add
+   • add `ʾahwe/i` to LEX. "Coffee"   (312 documents)
+   • add `(h)alḥīn` to LEX. "now"     (89 documents)</pre>
+    זה <b>תיקון אחד</b> ב-dropdown לכל שורה, לא בעיה נפרדת לכל מסמך.
+    מתקנים בגיליון, סורקים שוב, וכל העמודות ייכתבו.
+  </div>
+  <div class="ok">
+    חסימה של העתקת ערך ל-LEX. <b>לא עוצרת את הגזירות</b>. חוק 1 קורא מהטבלה ולא
+    מהגיליון, ולכן <code>PHON. *q</code> נגזר גם כשערך ה-Coffee עצמו לא ניתן לכתיבה.
+  </div>
+  <div class="note">
+    <b>המסמכים לא נכתבים מחדש</b> — רק הגיליון. הראיה כבר יושבת בטבלה של כל מסמך.
+  </div>
+</div>
+
+<!-- ═══════════════════════════ סרגל צד ═══════════════════════════ -->
+<div class="panel" id="p-side">
+  <h2>סרגל הצד</h2>
+  <table>
+    <tr><th style="width:34%">פריט</th><th>מה הוא עושה</th></tr>
+    <tr><td>📚 Corpus</td><td>כמה מסמכים נטענו</td></tr>
+    <tr><td>📋 Feature cheat sheet</td><td>בונה CSV של כל הפיצ׳רים + דוגמה אמיתית לכל אחד</td></tr>
+    <tr><td>🤖 Auto-tag</td><td>תיוג אוטומטי מטבלאות התעתיק</td></tr>
+    <tr><td>🔄 Reload corpus cache</td><td>טוען מחדש את רשימת המסמכים בלבד</td></tr>
+    <tr><td>↺ Clear cache &amp; reload</td><td>מנקה <b>הכל</b> ומושך מחדש מ-Drive</td></tr>
+  </table>
+
+  <h3>ה-Cheat sheet</h3>
+  <p>קובץ CSV עם שורה לכל פיצ׳ר:</p>
+  <table>
+    <tr><th>Feature</th><th>Example word(s)</th><th>Value</th><th>Seen in</th></tr>
+    <tr><td class="mono">LEX. "want"</td><td class="mono">biddi ašrab; w-bidd-i</td><td class="mono">bidd</td><td class="mono">D1</td></tr>
+    <tr><td class="mono">MOR. Fem. Ending</td><td class="mono">arḍiyye; madrase</td><td class="mono">-e</td><td class="mono">D1</td></tr>
+    <tr><td class="mono">SYN. Never Tagged</td><td></td><td></td><td></td></tr>
+  </table>
+  <div class="ok">
+    פיצ׳ר שמעולם לא תויג <b>נשאר ברשימה עם תא ריק</b>, כך שהקובץ משמש גם
+    כרשימת עבודה של מה שעוד לא נעשה.
+  </div>
+
+  <h3>מתי לנקות cache</h3>
+  <table>
+    <tr><th style="width:44%">מצב</th><th>מה לעשות</th></tr>
+    <tr><td>הוספת עמודת פיצ׳ר חדשה</td><td>לחכות ~2 דקות — מתגלה לבד</td></tr>
+    <tr><td>שינית אופציות ב-dropdown</td><td>לחכות ~5 דקות, או ↺ Clear cache</td></tr>
+    <tr><td>שינית טקסט במסמך ידנית</td><td>🔄 Reload ליד אותה תוצאה</td></tr>
+    <tr><td>משהו נראה תקוע</td><td>↺ Clear cache &amp; reload</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════ בעיות ═══════════════════════════ -->
+<div class="panel" id="p-trouble">
+  <h2>פתרון בעיות</h2>
+
+  <h3>חיפוש מחזיר אפס תוצאות</h3>
+  <p>הממשק מציג את <b>המשפך</b> ואומר איפה זה נעצר:</p>
+  <pre>312 documents in corpus → 47 after filters → 0 matched</pre>
+  <table>
+    <tr><th style="width:40%">מה רואים</th><th>מה זה אומר</th></tr>
+    <tr><td><code>… → 0 after filters → 0</code></td><td>הפילטרים סיננו הכל. התבנית <b>לא נבדקה כלל</b>.</td></tr>
+    <tr><td><code>312 → 47 → 0</code></td><td>הפילטרים מצמצמים ל-47. אולי כדאי להרחיב.</td></tr>
+    <tr><td><code>312 → 312 → 0</code></td><td>כל הקורפוס נסרק — הבעיה בתבנית.</td></tr>
+  </table>
+  <div class="note">
+    ההודעה <b>נשארת על המסך</b> עד החיפוש הבא, כך שאפשר להבדיל בין ״אפס תוצאות״
+    לבין ״משהו נתקע״.
+  </div>
+
+  <h3>תקלות נפוצות</h3>
+  <table>
+    <tr><th style="width:40%">התופעה</th><th>הסיבה והפתרון</th></tr>
+    <tr><td>עמודה חדשה לא מופיעה</td><td>לחכות ~2 דקות, או ↺ Clear cache</td></tr>
+    <tr><td>אופציות ב-dropdown לא מעודכנות</td><td>~5 דקות, או ↺ Clear cache</td></tr>
+    <tr><td>פאנל מחיקת התיוגים נעלם</td><td>קריאה מהגיליון נכשלה רגעית — תופיע הודעה. התיוגים <b>לא</b> נפגעו.</td></tr>
+    <tr><td>תבנית מחזירה פחות מהצפוי</td><td>לבדוק פילטרים פעילים (הבאנר הכחול), ולנסות בלי עוגנים <code>^</code>/<code>#</code></td></tr>
+    <tr><td>חיפוש עם <code>C</code> מפספס מילים</td><td>תוקן — <code>C</code> כולל עכשיו גם <span class="mono">ḅ ṃ ḷ ṛ ḏ̣</span>. חיפושים ישנים כדאי להריץ מחדש.</td></tr>
+    <tr><td>מסמך .docx לא נמצא בחיפוש</td><td>תוקן — הממשק קורא גם קובצי Word ולא רק Google Docs</td></tr>
+  </table>
+
+  <h3>למה חיפוש לפעמים איטי</h3>
+  <p>
+    בפעם הראשונה בסשן הממשק מושך את כל המסמכים ל-cache ברקע. חיפושים אחר כך
+    מהירים משמעותית. עריכת מילה מרעננת <b>רק את אותו מסמך</b>, לא את כולם.
+  </p>
+
+  <div class="bad">
+    <b>אין ביטול.</b> לתיוג, למחיקה, להחלפת מילה ולתיוג אוטומטי אין undo — הם
+    כותבים ישירות ל-Google. בתיוג אוטומטי במיוחד: להוריד את ה-CSV ולעבור עליו
+    <b>לפני</b> Apply.
+  </div>
+</div>
+
+<footer>
+  PAI Corpus Search · מדריך שימוש<br>
+  האיורים במסמך זה הם סכמות שצוירו לפי הממשק, לא צילומי מסך.
+</footer>
+
+<script>
+(function(){
+  var tabs = document.querySelectorAll('.tab');
+  var map = {start:'p-start',search:'p-search',root:'p-root',feat:'p-feat',
+             tag:'p-tag',but:'p-but',edit:'p-edit',comment:'p-comment',
+             csv:'p-csv',auto:'p-auto',side:'p-side',trouble:'p-trouble'};
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      tabs.forEach(function(x){ x.classList.remove('active'); });
+      document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); });
+      t.classList.add('active');
+      var el = document.getElementById(map[t.dataset.t]);
+      if (el) el.classList.add('active');
+      window.scrollTo({top:0, behavior:'smooth'});
+    });
+  });
+})();
+</script>
+</body>
+</html>
