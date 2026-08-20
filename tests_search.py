@@ -2032,6 +2032,20 @@ check('AT8 the reason is recorded',
       'sends .html as' in source and 'text/plain' in source)
 
 check('AT9 a sidebar button opens it', 'guide_open' in source)
+# GUIDE_URL switches between linking out and rendering in-app
+check('AT9a there is a GUIDE_URL switch', 'GUIDE_URL = ""' in source)
+check('AT9b an empty GUIDE_URL keeps the in-app renderer',
+      app.GUIDE_URL == '' , repr(app.GUIDE_URL))
+check('AT9c a set GUIDE_URL links out instead',
+      'if GUIDE_URL:' in source and 'st.link_button' in source)
+check('AT9d the in-app path is the documented fallback',
+      'Falls back to rendering in-app' in source)
+# the URLs that do NOT work are recorded, so nobody wires up a raw link
+for _bad in ['raw.githubusercontent.com', 'blob/', 'app/static/']:
+    check(f'AT9e the guide notes that {_bad} does not render', _bad in source)
+check('AT9f GitHub Pages is named as the option that works',
+      'GitHub Pages does work' in source
+      and 'requires a PUBLIC repository' in source)
 check('AT10 it can also be downloaded', 'PAI-guide.html' in source)
 check('AT11 the download is the self-contained version',
       "_guide.encode('utf-8')" in source)

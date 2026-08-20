@@ -2956,6 +2956,21 @@ def canonicalise_table_value(value: str, options: list) -> str | None:
 
 GUIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GUIDE.html')
 
+# Set this to a URL that RENDERS the guide and the sidebar links out to it
+# instead of inlining ~1 MB into every page load. Leave it empty to keep
+# rendering the guide inside the app.
+#
+# It must be a URL that serves text/html. These do NOT work:
+#   raw.githubusercontent.com/...   -> served as text/plain (shows source)
+#   github.com/.../blob/...         -> GitHub's file viewer (shows source)
+#   <streamlit app>/app/static/...  -> Streamlit sends .html as text/plain too
+#
+# GitHub Pages does work. Enable it on the repo (Settings -> Pages -> deploy
+# from branch main, folder /root) and the address is:
+#   https://<owner>.github.io/<repo>/GUIDE.html
+# Note that free GitHub Pages requires a PUBLIC repository.
+GUIDE_URL = ""
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_guide_html() -> str:
@@ -4470,19 +4485,26 @@ if corpus and not st.session_state.get('_preload_started'):
 
 with st.sidebar:
     # ── User guide ────────────────────────────────────────────────────────────
-    _guide = load_guide_html()
-    if _guide:
-        if st.button("📖  מדריך שימוש", key="guide_open",
-                     help="Open the illustrated guide inside the app"):
-            st.session_state['_show_guide'] = True
-            st.rerun()
-        st.download_button(
-            "⬇  Download the guide", _guide.encode('utf-8'),
-            file_name="PAI-guide.html", mime="text/html", key="guide_dl",
-            help="A single self-contained file — the screenshots travel with it",
-        )
+    # Prefer a hosted copy when one is configured: linking out keeps ~1 MB of
+    # inlined screenshots off every page load, and lets the browser cache the
+    # images. Falls back to rendering in-app so the guide is never unreachable.
+    if GUIDE_URL:
+        st.link_button("📖  מדריך שימוש", GUIDE_URL,
+                       help="Opens the illustrated guide in a new tab")
     else:
-        st.caption("📖 GUIDE.html not found next to app.py")
+        _guide = load_guide_html()
+        if _guide:
+            if st.button("📖  מדריך שימוש", key="guide_open",
+                         help="Open the illustrated guide inside the app"):
+                st.session_state['_show_guide'] = True
+                st.rerun()
+            st.download_button(
+                "⬇  Download the guide", _guide.encode('utf-8'),
+                file_name="PAI-guide.html", mime="text/html", key="guide_dl",
+                help="A single self-contained file — the screenshots travel with it",
+            )
+        else:
+            st.caption("📖 GUIDE.html not found next to app.py")
 
     # ── Feature cheat sheet ───────────────────────────────────────────────────
     with st.expander("📋  Feature cheat sheet"):
