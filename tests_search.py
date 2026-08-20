@@ -8,7 +8,7 @@ Covers the territory tests_full.py and tests_deep.py do not:
 
 Run: python tests_search.py
 """
-import sys, re, json, unicodedata
+import sys, re, io, json, unicodedata
 import unittest.mock as mock
 
 sys.path.insert(0, '/sessions/laughing-eager-ramanujan')
@@ -1472,9 +1472,9 @@ check('AM38 conflicts and unmatched values are shown, not hidden',
 check('AM38a the summary reports the same split the lists show',
       '_n_todo, _n_other = len(_todo), len(_other)' in source
       and '{_n_todo} dropdown option' in source)
-check('AM38b every unwritten value is exportable, not just the grouped view',
-      'pai_autotag_unwritten.csv' in source
-      and "All {len(_at['unmatched'])} unwritten values" in source)
+check('AM38b everything unhandled is exportable, not just the grouped view',
+      'pai_autotag_unhandled.csv' in source
+      and 'All {_n_unhandled} unhandled items' in source)
 check('AM38c the actionable list opens by default',
       'expanded=True' in source)
 check('AM38d the most widespread gaps are listed first',
@@ -2114,6 +2114,77 @@ check('AT18 they are compressed jpgs, not multi-MB pngs',
 _total = sum(_os2.path.getsize(_os2.path.join(_imgdir, f)) for f in _imgs)
 check('AT19 the whole set stays under 1 MB', _total < 1_000_000,
       f'{_total//1024} KB')
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AU. One export of everything the auto-tagger could not handle')
+# ══════════════════════════════════════════════════════════════════════════════
+
+import csv as _csvmod
+_SCAN = {
+    'unmatched': [
+        {'doc': 'D1', 'feature': 'LEX. "Coffee"', 'value': 'ʾahwe/i',
+         'detail': 'not an option'},
+        {'doc': 'D2', 'feature': 'LEX. "now"', 'value': '(h)alḥīn',
+         'detail': 'not an option'},
+        {'doc': 'D3', 'detail': 'Rooster/Roosters = "dīk / dyūč"'},
+    ],
+    'conflicts': [{'doc': 'D4', 'feature': 'PHON. *k',
+                   'value': 'k', 'existing': 'č'}],
+    'no_table': ['D5', 'D6'],
+    'proposals': [], 'scanned': 6,
+}
+_out = app.build_unhandled_csv(_SCAN)
+_rows = list(_csvmod.reader(io.StringIO(_out))) if False else \
+        list(_csvmod.reader(_out.splitlines()))
+_hdr, _body = _rows[0], _rows[1:]
+
+check('AU1 every unhandled item gets a row',
+      len(_body) == 6, f'{len(_body)} rows')
+check('AU2 the header names the category and the action',
+      _hdr == ['Category', 'Document', 'Feature', 'Value in document',
+               'Value in sheet', 'What to do'], str(_hdr))
+
+_cats = [r[0] for r in _body]
+for _c in ['dropdown option missing', 'unrecognised reflex', 'conflict', 'no table']:
+    check(f'AU3 category "{_c}" is present', _c in _cats, str(set(_cats)))
+
+_by_doc = {r[1]: r for r in _body}
+check('AU4 a dropdown gap names the column and the missing value',
+      _by_doc['D1'][2] == 'LEX. "Coffee"' and _by_doc['D1'][3] == 'ʾahwe/i')
+check('AU5 ...and says to add it to the dropdown',
+      'dropdown' in _by_doc['D1'][5] and 'ʾahwe/i' in _by_doc['D1'][5],
+      _by_doc['D1'][5])
+check('AU6 an unreadable reflex carries its detail',
+      'dīk / dyūč' in _by_doc['D3'][3], _by_doc['D3'][3])
+check('AU7 a conflict shows BOTH values side by side',
+      _by_doc['D4'][3] == 'k' and _by_doc['D4'][4] == 'č', str(_by_doc['D4']))
+check('AU8 ...and says the existing tag was kept',
+      'Existing tag kept' in _by_doc['D4'][5])
+check('AU9 a document with no table is listed by name',
+      _by_doc['D5'][0] == 'no table')
+check('AU10 every row carries an action, not just a diagnosis',
+      all(r[5].strip() for r in _body))
+
+# robustness
+check('AU11 an empty scan yields just the header',
+      len(list(_csvmod.reader(app.build_unhandled_csv(
+          {'unmatched': [], 'conflicts': [], 'no_table': []}).splitlines()))) == 1)
+check('AU12 missing keys do not raise',
+      app.build_unhandled_csv({}).count('Category') == 1)
+check('AU13 rows with absent fields still export',
+      len(list(_csvmod.reader(app.build_unhandled_csv(
+          {'unmatched': [{'detail': 'x'}]}).splitlines()))) == 2)
+
+# wiring
+check('AU14 the panel offers the combined download',
+      'pai_autotag_unhandled.csv' in source)
+check('AU15 the button counts all three problem kinds',
+      "len(_at['unmatched']) + len(_at['conflicts'])" in source
+      and "len(_at['no_table'])" in source)
+check('AU16 it is offered whenever anything went unhandled',
+      'if _n_unhandled:' in source)
+check('AU17 the older unmatched-only export is gone',
+      'pai_autotag_unwritten.csv' not in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

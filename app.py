@@ -3159,6 +3159,62 @@ def scan_auto_tags(corpus: list, progress=None) -> dict:
             'scanned': len(docs)}
 
 
+def build_unhandled_csv(scan: dict) -> str:
+    """
+    One CSV of everything the auto-tagger could NOT write, whatever the reason.
+
+    The scan reports three separate problems and they were only ever visible in
+    three separate places on screen. Anyone auditing a run wants them together,
+    with the document named, so they can be worked through in a spreadsheet:
+
+      dropdown option missing — the document's value is not offered by that
+                                column's dropdown, so writing it would leave an
+                                invalid cell
+      unrecognised reflex     — a ديك\\ديوك spelling the k/č rules could not read
+      conflict                — the cell already holds a DIFFERENT value, left
+                                alone because a human tag records a judgement
+      no table                — the document had no readable transcription table
+
+    Every row carries a concrete next action rather than only a diagnosis.
+    """
+    import csv as _c, io as _i
+    buf = _i.StringIO()
+    w = _c.writer(buf)
+    w.writerow(['Category', 'Document', 'Feature',
+                'Value in document', 'Value in sheet', 'What to do'])
+
+    for u in scan.get('unmatched', []):
+        if u.get('feature'):
+            w.writerow([
+                'dropdown option missing', u.get('doc', ''), u['feature'],
+                u.get('value', ''), '',
+                f"Add \"{u.get('value','')}\" to this column's dropdown in "
+                f"Google Sheets, then scan again",
+            ])
+        else:
+            w.writerow([
+                'unrecognised reflex', u.get('doc', ''), '',
+                u.get('detail', ''), '',
+                'Check the spelling in the document table against the '
+                'template options (dīk-dyūk / dīč-dyūč / dīč-dyūk)',
+            ])
+
+    for c in scan.get('conflicts', []):
+        w.writerow([
+            'conflict', c.get('doc', ''), c.get('feature', ''),
+            c.get('value', ''), c.get('existing', ''),
+            'Existing tag kept. Decide which is right and edit the sheet by hand',
+        ])
+
+    for name in scan.get('no_table', []):
+        w.writerow([
+            'no table', name, '', '', '',
+            'Document has no readable transcription table — check it opens and '
+            'the table is present',
+        ])
+    return buf.getvalue()
+
+
 def apply_auto_tags(proposals: list) -> int:
     """
     Write accepted proposals to the spreadsheet in ONE batchUpdate.
@@ -4594,6 +4650,21 @@ with st.sidebar:
                 f"📄 **{len(_at['no_table'])}** documents with no table"
             )
 
+            # One file for everything the scan could not write, whatever the
+            # reason — the three problems are reported in three places on
+            # screen, which is fine for acting on but useless for auditing.
+            _n_unhandled = (len(_at['unmatched']) + len(_at['conflicts'])
+                            + len(_at['no_table']))
+            if _n_unhandled:
+                st.download_button(
+                    f"⬇  All {_n_unhandled} unhandled items (CSV)",
+                    build_unhandled_csv(_at).encode('utf-8-sig'),
+                    file_name="pai_autotag_unhandled.csv", mime="text/csv",
+                    key="autotag_unhandled_dl",
+                    help="Dropdown gaps, unreadable reflexes, conflicts and "
+                         "documents with no table — each with what to do about it",
+                )
+
             if _props:
                 import csv as _c2, io as _i2
                 _b = _i2.StringIO()
@@ -4649,22 +4720,6 @@ with st.sidebar:
                             f"`{_cf['value']}`"
                         )
             if _at['unmatched']:
-                # Full list as CSV — the grouped view below is for acting on,
-                # this is for auditing every affected document.
-                import csv as _c4, io as _i4
-                _ub = _i4.StringIO()
-                _uw = _c4.writer(_ub)
-                _uw.writerow(['Document', 'Feature', 'Value in table', 'Why not written'])
-                for _um in _at['unmatched']:
-                    _uw.writerow([_um.get('doc', ''), _um.get('feature', ''),
-                                  _um.get('value', ''), _um.get('detail', '')])
-                st.download_button(
-                    f"⬇ All {len(_at['unmatched'])} unwritten values (CSV)",
-                    _ub.getvalue().encode('utf-8-sig'),
-                    file_name="pai_autotag_unwritten.csv", mime="text/csv",
-                    key="autotag_unmatched_dl",
-                )
-
                 if _todo:
                     with st.expander(
                             f"🔧 {_n_todo} dropdown option(s) to add in the sheet",
