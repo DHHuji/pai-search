@@ -2927,6 +2927,39 @@ def derive_phon_from_table(table_vals: dict) -> tuple:
     return derived, unmatched
 
 
+# Explicit spellings that mean the same thing as one of a column's options.
+# The template writes the optional-h form; the sheet offers it written out.
+DOC_TABLE_VALUE_ALIASES = {
+    '(h)alḥīn': 'halḥīn',
+}
+
+
+def _optional_variants(value: str) -> list:
+    """
+    Expand the corpus's optional-segment notation into the forms it stands for.
+
+    Transcriptions mark an optional sound with brackets — '(h)alḥīn' is halḥīn
+    or alḥīn, 'hallaʾ[a]' is hallaʾa or hallaʾ. A column's dropdown normally
+    offers one of those written out, so a literal comparison misses it and the
+    document goes untagged for no real reason.
+
+    Returns the value itself first, then each expansion, so an exact match is
+    always preferred over a guess.
+    """
+    out = [value]
+    for pat in (r'\(([^)]*)\)', r'\[([^\]]*)\]'):
+        for form in list(out):
+            m = re.search(pat, form)
+            if not m:
+                continue
+            with_it    = (form[:m.start()] + m.group(1) + form[m.end():]).strip()
+            without_it = (form[:m.start()] + form[m.end():]).strip()
+            for v in (with_it, without_it):
+                if v and v not in out:
+                    out.append(v)
+    return out
+
+
 def canonicalise_table_value(value: str, options: list) -> str | None:
     """
     Map a value written in a document's table onto the matching option defined
@@ -2947,10 +2980,28 @@ def canonicalise_table_value(value: str, options: list) -> str | None:
         return value
     _key = lambda v: re.sub(r'[\s\\/|~-]+', '',
                             unicodedata.normalize('NFC', str(v or ''))).casefold()
+
+    # 1. exact match on the value as written
     want = _key(value)
     for opt in options:
         if _key(opt) == want:
             return opt
+
+    # 2. an explicitly declared alias
+    alias = DOC_TABLE_VALUE_ALIASES.get(str(value).strip())
+    if alias:
+        for opt in options:
+            if _key(opt) == _key(alias):
+                return opt
+
+    # 3. expand optional-segment notation — '(h)alḥīn' -> halḥīn / alḥīn.
+    #    Only accepted when exactly ONE expansion matches an option, so an
+    #    ambiguous case is still reported rather than guessed at.
+    hits = {opt for form in _optional_variants(value)[1:]
+            for opt in options if _key(opt) == _key(form)}
+    if len(hits) == 1:
+        return hits.pop()
+
     return None
 
 
@@ -3212,6 +3263,64 @@ def build_unhandled_csv(scan: dict) -> str:
             'Document has no readable transcription table — check it opens and '
             'the table is present',
         ])
+    return buf.getvalue()
+
+
+def summarise_unhandled(scan: dict) -> list:
+    """
+    Collapse a scan's unhandled items to ONE ROW PER DISTINCT PROBLEM.
+
+    A run can report hundreds of rows that are really a handful of issues: 65
+    unwritten values turned out to be 8 distinct ones, the largest affecting 17
+    documents. The per-document list is what you audit; this is what you act
+    on, and it is ordered by how many documents each problem holds up.
+
+    Returns dicts sorted by impact: category, feature, value, docs (count) and
+    examples (a few document names).
+    """
+    groups: dict = {}
+
+    def _add(cat, feature, value, doc):
+        g = groups.setdefault((cat, feature, value), {'docs': []})
+        if doc:
+            g['docs'].append(doc)
+
+    for u in scan.get('unmatched', []):
+        if u.get('feature'):
+            _add('dropdown option missing', u['feature'],
+                 u.get('value', ''), u.get('doc', ''))
+        else:
+            _add('unrecognised reflex', '', u.get('detail', ''), u.get('doc', ''))
+    for c in scan.get('conflicts', []):
+        _add('conflict', c.get('feature', ''),
+             f"{c.get('value','')}  (sheet has {c.get('existing','')})",
+             c.get('doc', ''))
+    for name in scan.get('no_table', []):
+        _add('no table', '', '', name)
+
+    out = []
+    for (cat, feature, value), g in groups.items():
+        out.append({
+            'category': cat,
+            'feature':  feature,
+            'value':    value,
+            'docs':     len(g['docs']),
+            'examples': ', '.join(g['docs'][:3]),
+        })
+    out.sort(key=lambda r: (-r['docs'], r['category'], r['feature'], r['value']))
+    return out
+
+
+def build_unhandled_summary_csv(scan: dict) -> str:
+    """The distinct-problem view of a scan, as CSV."""
+    import csv as _c, io as _i
+    buf = _i.StringIO()
+    w = _c.writer(buf)
+    w.writerow(['Problem', 'Feature', 'Value in document',
+                'Documents affected', 'Example documents'])
+    for r in summarise_unhandled(scan):
+        w.writerow([r['category'], r['feature'], r['value'],
+                    r['docs'], r['examples']])
     return buf.getvalue()
 
 
@@ -4656,6 +4765,30 @@ with st.sidebar:
             _n_unhandled = (len(_at['unmatched']) + len(_at['conflicts'])
                             + len(_at['no_table']))
             if _n_unhandled:
+                _uniq = summarise_unhandled(_at)
+                with st.expander(
+                        f"🧾 {len(_uniq)} distinct problem(s) behind "
+                        f"{_n_unhandled} items", expanded=True):
+                    st.caption(
+                        "One row per distinct problem, most widespread first. "
+                        "Fixing the top few usually clears most of the run."
+                    )
+                    for _u in _uniq[:25]:
+                        _lbl = f"`{_u['value']}`" if _u['value'] else "—"
+                        _ft  = f" · **{_u['feature']}**" if _u['feature'] else ""
+                        st.markdown(
+                            f"- **{_u['docs']}×** {_u['category']}{_ft} {_lbl}",
+                            unsafe_allow_html=True,
+                        )
+                    if len(_uniq) > 25:
+                        st.caption(f"…and {len(_uniq) - 25} more — see the CSV.")
+                    st.download_button(
+                        f"⬇  {len(_uniq)} distinct problems (CSV)",
+                        build_unhandled_summary_csv(_at).encode('utf-8-sig'),
+                        file_name="pai_autotag_problems.csv", mime="text/csv",
+                        key="autotag_uniq_dl",
+                    )
+
                 st.download_button(
                     f"⬇  All {_n_unhandled} unhandled items (CSV)",
                     build_unhandled_csv(_at).encode('utf-8-sig'),

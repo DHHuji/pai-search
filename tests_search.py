@@ -1991,7 +1991,11 @@ try:
     check('AS6 the rooster spelling is canonicalised to the sheet option',
           _pv.get('LEX. "Rooster/Roosters"') == 'dīk / dyūk', str(_pv))
     check('AS7 a value missing from the dropdown is NOT written',
-          'LEX. "Coffee"' not in _pv and 'LEX. "now"' not in _pv, str(_pv))
+          'LEX. "Coffee"' not in _pv, str(_pv))
+    # '(h)alḥīn' is optional-segment notation for halḥīn/alḥīn, and the sheet
+    # offers alḥīn — so it now resolves instead of being reported.
+    check('AS7b optional-segment notation resolves against the dropdown',
+          _pv.get('LEX. "now"') == 'alḥīn', str(_pv))
 
     # the derivations read the TABLE, so a blocked LEX. copy does not stop them
     check('AS8 rule 1 fires from the table even when the Coffee copy is blocked',
@@ -2001,8 +2005,7 @@ try:
     # the report has to be actionable
     _todo = {(u['feature'], u['value']) for u in _r['unmatched'] if u.get('feature')}
     check('AS10 each mismatch names the column AND the missing option',
-          _todo == {('LEX. "Coffee"', 'ʾahwe/i'), ('LEX. "now"', '(h)alḥīn')},
-          str(_todo))
+          _todo == {('LEX. "Coffee"', 'ʾahwe/i')}, str(_todo))
     check('AS11 mismatches carry structured fields, not just prose',
           all({'feature', 'value', 'doc'} <= set(u)
               for u in _r['unmatched'] if u.get('feature')))
@@ -2185,6 +2188,83 @@ check('AU16 it is offered whenever anything went unhandled',
       'if _n_unhandled:' in source)
 check('AU17 the older unmatched-only export is gone',
       'pai_autotag_unwritten.csv' not in source)
+
+# ══════════════════════════════════════════════════════════════════════════════
+section('AV. Optional-segment notation, and the distinct-problem summary')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_NOW = ['halḥīn', 'hallaʾ', 'halgēt', 'halkēt', 'halʾēt',
+        'hassa', 'issa', 'hassāʿ', 'haʾʾēte']
+_ROO = ['dīk / dyūk', 'dīč / dyūč', 'dīč / dyūk']
+_cv = app.canonicalise_table_value
+
+# THE reported case: (h)alḥīn should tag as halḥīn
+check('AV1 "(h)alḥīn" resolves to halḥīn', _cv('(h)alḥīn', _NOW) == 'halḥīn')
+check('AV2 the alias is declared explicitly too',
+      app.DOC_TABLE_VALUE_ALIASES.get('(h)alḥīn') == 'halḥīn')
+
+# the same notation, handled generally rather than case by case
+check('AV3 square brackets expand: hallaʾ[a] -> hallaʾ',
+      _cv('hallaʾ[a]', _NOW) == 'hallaʾ')
+check('AV4 brackets expand on the rooster column too',
+      _cv('dīč-dyūč[a]', _ROO) == 'dīč / dyūč')
+check('AV5 an exact value is still preferred over an expansion',
+      _cv('hallaʾ', _NOW) == 'hallaʾ')
+check('AV6 a value matching nothing is still reported',
+      _cv('nonsense', _NOW) is None)
+check('AV7 expansion yields both forms',
+      set(app._optional_variants('(h)alḥīn')) >= {'(h)alḥīn', 'halḥīn', 'alḥīn'},
+      str(app._optional_variants('(h)alḥīn')))
+# ambiguity must NOT be guessed at
+check('AV8 an ambiguous expansion is refused, not guessed',
+      _cv('(h)alḥīn', ['halḥīn', 'alḥīn']) is None,
+      'both forms are options, so there is no single right answer')
+
+# ── distinct-problem summary ──
+_S = {
+    'unmatched': (
+        [{'doc': f'D{i}', 'feature': 'LEX. "now"', 'value': '(h)alḥīn'}
+         for i in range(17)]
+        + [{'doc': f'E{i}', 'feature': 'LEX. "Heavy"', 'value': 'ṯqīl'}
+           for i in range(16)]
+        + [{'doc': 'F1', 'detail': 'Rooster/Roosters = "zzz"'}]),
+    'conflicts': [{'doc': 'G1', 'feature': 'PHON. *k',
+                   'value': 'k', 'existing': 'č'}],
+    'no_table': [f'H{i}' for i in range(92)],
+}
+_u = app.summarise_unhandled(_S)
+check('AV9 126 items collapse to 4 distinct problems', len(_u) == 4, str(len(_u)))
+check('AV10 the most widespread problem is first',
+      _u[0]['docs'] == 92 and _u[0]['category'] == 'no table', str(_u[0]))
+check('AV11 each row counts the documents it affects',
+      [r['docs'] for r in _u] == [92, 17, 16, 1], str([r['docs'] for r in _u]))
+check('AV12 a dropdown gap names its feature and value',
+      any(r['feature'] == 'LEX. "now"' and r['value'] == '(h)alḥīn' for r in _u))
+check('AV13 a conflict shows both sides in one row',
+      any('sheet has č' in r['value'] for r in _u),
+      str([r['value'] for r in _u]))
+check('AV14 example documents are included',
+      all(r['examples'] or r['docs'] == 0 for r in _u))
+check('AV15 identical problems in different documents merge',
+      sum(1 for r in _u if r['value'] == '(h)alḥīn') == 1)
+
+_csv_out = app.build_unhandled_summary_csv(_S)
+_r = list(_csvmod.reader(_csv_out.splitlines()))
+check('AV16 the summary exports as CSV', len(_r) == 5, str(len(_r)))
+check('AV17 its header names impact, not just the problem',
+      'Documents affected' in _r[0], str(_r[0]))
+check('AV18 an empty scan summarises to nothing',
+      app.summarise_unhandled({'unmatched': [], 'conflicts': [], 'no_table': []}) == [])
+
+# ── wiring ──
+check('AV19 the panel shows the distinct problems',
+      'distinct problem(s) behind' in source)
+check('AV20 it opens expanded, since it is the actionable view',
+      "expanded=True" in source)
+check('AV21 the distinct list is downloadable',
+      'pai_autotag_problems.csv' in source)
+check('AV22 the per-document export is still there for auditing',
+      'pai_autotag_unhandled.csv' in source)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
