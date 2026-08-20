@@ -2048,7 +2048,25 @@ check('AT9f GitHub Pages is named as the option that works',
       and 'requires a PUBLIC repository' in source)
 check('AT10 it can also be downloaded', 'PAI-guide.html' in source)
 check('AT11 the download is the self-contained version',
-      "_guide.encode('utf-8')" in source)
+      "_g.encode('utf-8')" in source)
+# The guide must NOT be built on every rerun: Streamlit re-executes the whole
+# script on each interaction, so inlining 1 MB there shipped it constantly.
+check('AT11a the sidebar only does a cheap existence check',
+      'elif os.path.exists(GUIDE_PATH):' in source)
+# Count real CALLS: strip comment lines and the def itself, so a mention in
+# prose does not read as an invocation.
+_code = '\n'.join(l for l in source.split('\n')
+                  if not l.lstrip().startswith('#')
+                  and not l.lstrip().startswith('def load_guide_html'))
+_sidebar = _code.split('elif os.path.exists(GUIDE_PATH):')[1].split('# ')[0] \
+           if 'elif os.path.exists(GUIDE_PATH):' in _code else ''
+check('AT11b the sidebar never builds the guide',
+      'load_guide_html()' not in _sidebar, _sidebar[:160])
+check('AT11c the guide is built in exactly ONE place',
+      _code.count('load_guide_html()') == 1,
+      f"{_code.count('load_guide_html()')} calls")
+check('AT11d that place is the overlay',
+      '_g = load_guide_html()' in _code)
 check('AT12 it renders in the main column, not the sidebar',
       "if st.session_state.get('_show_guide'):" in source)
 check('AT13 the rest of the page is skipped while it is open',

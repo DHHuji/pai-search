@@ -4491,20 +4491,18 @@ with st.sidebar:
     if GUIDE_URL:
         st.link_button("📖  מדריך שימוש", GUIDE_URL,
                        help="Opens the illustrated guide in a new tab")
+    elif os.path.exists(GUIDE_PATH):
+        # Only a cheap existence check here. Building the guide inlines ~1 MB
+        # of screenshots, and Streamlit reruns this whole script on EVERY
+        # interaction — so calling load_guide_html() at this point, or handing
+        # its output to a download button, shipped a megabyte on every search,
+        # checkbox and tag. It is built when the guide is actually opened.
+        if st.button("📖  מדריך שימוש", key="guide_open",
+                     help="Open the illustrated guide inside the app"):
+            st.session_state['_show_guide'] = True
+            st.rerun()
     else:
-        _guide = load_guide_html()
-        if _guide:
-            if st.button("📖  מדריך שימוש", key="guide_open",
-                         help="Open the illustrated guide inside the app"):
-                st.session_state['_show_guide'] = True
-                st.rerun()
-            st.download_button(
-                "⬇  Download the guide", _guide.encode('utf-8'),
-                file_name="PAI-guide.html", mime="text/html", key="guide_dl",
-                help="A single self-contained file — the screenshots travel with it",
-            )
-        else:
-            st.caption("📖 GUIDE.html not found next to app.py")
+        st.caption("📖 GUIDE.html not found next to app.py")
 
     # ── Feature cheat sheet ───────────────────────────────────────────────────
     with st.expander("📋  Feature cheat sheet"):
@@ -4702,6 +4700,11 @@ if st.session_state.get('_show_guide'):
             st.rerun()
     _g = load_guide_html()
     if _g:
+        st.download_button(
+            "⬇  Download this guide", _g.encode('utf-8'),
+            file_name="PAI-guide.html", mime="text/html", key="guide_dl",
+            help="A single self-contained file — the screenshots travel with it",
+        )
         components.html(_g, height=900, scrolling=True)
     else:
         st.error("GUIDE.html was not found next to app.py.")
