@@ -1464,7 +1464,23 @@ check('AM36 applying requires an explicit confirmation',
       '_autotag_confirm' in source)
 check('AM37 the preview is exportable as CSV', 'pai_autotag_preview.csv' in source)
 check('AM38 conflicts and unmatched values are shown, not hidden',
-      'conflicts — left unchanged' in source and 'unrecognised values' in source)
+      'conflicts — left unchanged' in source
+      and 'unrecognised reflex value(s)' in source
+      and 'dropdown option(s) to add' in source)
+# The summary counted RAW items while the list below grouped them, so "65
+# unrecognised" could show as three rows and look like missing data.
+check('AM38a the summary reports the same split the lists show',
+      '_n_todo, _n_other = len(_todo), len(_other)' in source
+      and '{_n_todo} dropdown option' in source)
+check('AM38b every unwritten value is exportable, not just the grouped view',
+      'pai_autotag_unwritten.csv' in source
+      and "All {len(_at['unmatched'])} unwritten values" in source)
+check('AM38c the actionable list opens by default',
+      'expanded=True' in source)
+check('AM38d the most widespread gaps are listed first',
+      'key=lambda kv: -len(kv[1])' in source)
+check('AM38e truncation is stated rather than silent',
+      'more — see the CSV' in source)
 check('AM39 apply writes only the sheet, not 700+ documents',
       'update_gdoc_features_section' not in
       source.split('def apply_auto_tags')[1].split('\ndef ')[0])

@@ -4570,11 +4570,27 @@ with st.sidebar:
         _at = st.session_state.get('_autotag')
         if _at:
             _props = _at['proposals']
+            # Split the unmatched the same way they are DISPLAYED, so the
+            # summary numbers and the lists below reconcile. Grouping many
+            # documents that hit one dropdown gap into a single fix is the
+            # point — but then the raw total on its own reads as missing data.
+            _todo: dict = {}
+            _other: list = []
+            for _um in _at['unmatched']:
+                if _um.get('feature'):
+                    _todo.setdefault((_um['feature'], _um['value']), []).append(
+                        _um.get('doc', ''))
+                else:
+                    _other.append(_um)
+            _n_todo, _n_other = len(_todo), len(_other)
             st.markdown(
                 f"**{_at['scanned']}** documents scanned  \n"
                 f"✅ **{len(_props)}** cells to fill  \n"
                 f"⚠️ **{len(_at['conflicts'])}** conflicts (skipped)  \n"
-                f"❓ **{len(_at['unmatched'])}** unrecognised values  \n"
+                f"❓ **{len(_at['unmatched'])}** values not written "
+                f"({_n_todo} dropdown option"
+                f"{'s' if _n_todo != 1 else ''} to add"
+                f"{f', {_n_other} unrecognised reflex' if _n_other else ''})  \n"
                 f"📄 **{len(_at['no_table'])}** documents with no table"
             )
 
@@ -4633,34 +4649,50 @@ with st.sidebar:
                             f"`{_cf['value']}`"
                         )
             if _at['unmatched']:
-                # Group by (column, value): every document hitting the same
-                # mismatch is one dropdown fix, not N separate problems.
-                _todo: dict = {}
+                # Full list as CSV — the grouped view below is for acting on,
+                # this is for auditing every affected document.
+                import csv as _c4, io as _i4
+                _ub = _i4.StringIO()
+                _uw = _c4.writer(_ub)
+                _uw.writerow(['Document', 'Feature', 'Value in table', 'Why not written'])
                 for _um in _at['unmatched']:
-                    if _um.get('feature'):
-                        _todo.setdefault((_um['feature'], _um['value']), []).append(
-                            _um['doc'])
+                    _uw.writerow([_um.get('doc', ''), _um.get('feature', ''),
+                                  _um.get('value', ''), _um.get('detail', '')])
+                st.download_button(
+                    f"⬇ All {len(_at['unmatched'])} unwritten values (CSV)",
+                    _ub.getvalue().encode('utf-8-sig'),
+                    file_name="pai_autotag_unwritten.csv", mime="text/csv",
+                    key="autotag_unmatched_dl",
+                )
+
                 if _todo:
                     with st.expander(
-                            f"🔧 {len(_todo)} dropdown option(s) to add in the sheet"):
+                            f"🔧 {_n_todo} dropdown option(s) to add in the sheet",
+                            expanded=True):
                         st.caption(
                             "These values are written in the documents but are "
                             "not offered by the column's dropdown, so they were "
                             "NOT written. Add each option to its column in "
                             "Google Sheets, then scan again."
                         )
-                        for (_f, _v), _docs in sorted(_todo.items()):
+                        for (_f, _v), _docs in sorted(_todo.items(),
+                                                      key=lambda kv: -len(kv[1])):
                             st.markdown(
                                 f"- add `{_v}` to **{_f}**  "
                                 f"<small>({len(_docs)} document"
                                 f"{'s' if len(_docs) != 1 else ''})</small>",
                                 unsafe_allow_html=True,
                             )
-                _other = [u for u in _at['unmatched'] if not u.get('feature')]
                 if _other:
-                    with st.expander(f"❓ {len(_other)} unrecognised reflex value(s)"):
-                        for _um in _other[:40]:
-                            st.caption(f"**{_um['doc']}** · {_um['detail']}")
+                    with st.expander(f"❓ {_n_other} unrecognised reflex value(s)"):
+                        st.caption(
+                            "Rooster spellings the reflex rules could not read. "
+                            "Everything is in the CSV above."
+                        )
+                        for _um in _other[:60]:
+                            st.caption(f"**{_um.get('doc','')}** · {_um.get('detail','')}")
+                        if len(_other) > 60:
+                            st.caption(f"…and {len(_other) - 60} more — see the CSV.")
 
     st.markdown("### 📚 Corpus")
     if corpus:
