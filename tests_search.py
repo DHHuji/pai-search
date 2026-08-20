@@ -2002,6 +2002,71 @@ check('AS14 it explains those values were NOT written',
       'they were "\n                            "NOT written' in source
       or 'NOT written' in source)
 
+# ══════════════════════════════════════════════════════════════════════════════
+section('AT. In-app user guide')
+# ══════════════════════════════════════════════════════════════════════════════
+
+_g = app.load_guide_html()
+check('AT1 the guide file is found and loaded', len(_g) > 10000, str(len(_g)))
+check('AT2 all twelve tabs survive', len(re.findall(r'data-t=', _g)) == 12,
+      str(len(re.findall(r'data-t=', _g))))
+check('AT3 the tab script survives', '<script>' in _g and '</script>' in _g)
+
+# Self-containment is the whole point: the guide renders in a sandboxed iframe
+# (no relative paths) and is also offered as a download (no sibling folder).
+check('AT4 every screenshot is inlined as a data URI',
+      _g.count('data:image/') == 8, str(_g.count('data:image/')))
+check('AT5 NO relative image path remains',
+      not re.search(r'src="guide-img/', _g),
+      str(re.findall(r'src="guide-img/[^"]*"', _g)[:3]))
+_payloads = re.findall(r'data:image/[a-z]+;base64,([^"]+)', _g)
+check('AT6 the inlined images are real payloads, not empty',
+      len(_payloads) == 8 and all(len(b) > 20000 for b in _payloads),
+      f'{len(_payloads)} payloads, smallest {min(map(len,_payloads)) if _payloads else 0} chars')
+
+# Streamlit serves .html as text/plain, so linking to the file would show
+# source. It is rendered through components.html instead.
+check('AT7 the guide is rendered, not linked',
+      'components.html(_g, height=900, scrolling=True)' in source)
+check('AT8 the reason is recorded',
+      'sends .html as' in source and 'text/plain' in source)
+
+check('AT9 a sidebar button opens it', 'guide_open' in source)
+check('AT10 it can also be downloaded', 'PAI-guide.html' in source)
+check('AT11 the download is the self-contained version',
+      "_guide.encode('utf-8')" in source)
+check('AT12 it renders in the main column, not the sidebar',
+      "if st.session_state.get('_show_guide'):" in source)
+check('AT13 the rest of the page is skipped while it is open',
+      'st.stop()' in source.split("_show_guide'):")[1][:900])
+check('AT14 there is a close button', 'guide_close' in source)
+check('AT15 a missing guide file is reported, not blank',
+      'GUIDE.html not found next to app.py' in source
+      or 'GUIDE.html was not found next to app.py' in source)
+
+# a missing file must not raise
+_real = app.GUIDE_PATH
+try:
+    app.GUIDE_PATH = '/nonexistent/GUIDE.html'
+    app.load_guide_html.clear() if hasattr(app.load_guide_html, 'clear') else None
+    check('AT16 a missing guide file returns "" instead of raising',
+          app.load_guide_html() == '')
+finally:
+    app.GUIDE_PATH = _real
+    if hasattr(app.load_guide_html, 'clear'):
+        app.load_guide_html.clear()
+
+# the screenshots themselves
+import os as _os2
+_imgdir = _os2.path.join(_os2.path.dirname(app.GUIDE_PATH), 'guide-img')
+_imgs = sorted(_os2.listdir(_imgdir)) if _os2.path.isdir(_imgdir) else []
+check('AT17 all eight screenshots are in the repo', len(_imgs) == 8, str(_imgs))
+check('AT18 they are compressed jpgs, not multi-MB pngs',
+      all(f.endswith('.jpg') for f in _imgs), str(_imgs))
+_total = sum(_os2.path.getsize(_os2.path.join(_imgdir, f)) for f in _imgs)
+check('AT19 the whole set stays under 1 MB', _total < 1_000_000,
+      f'{_total//1024} KB')
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"="*66}')

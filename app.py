@@ -8,6 +8,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import re
 import io
+import os
+import base64
 import html as html_lib
 import unicodedata
 import json
@@ -2952,6 +2954,44 @@ def canonicalise_table_value(value: str, options: list) -> str | None:
     return None
 
 
+GUIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GUIDE.html')
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_guide_html() -> str:
+    """
+    The user guide, with its screenshots inlined as data URIs.
+
+    Inlining matters because the guide is used two ways and both would
+    otherwise break: rendered inside the app it lives in a sandboxed
+    components iframe, which cannot resolve a relative path back to the
+    server; downloaded, it is a lone file with no guide-img/ folder beside it.
+    Streamlit's own static serving is no help here — it sends .html as
+    text/plain, so a plain link would show the source instead of the page.
+
+    Returns '' when the guide file is missing, so the caller can say so
+    rather than rendering a blank panel.
+    """
+    try:
+        with open(GUIDE_PATH, encoding='utf-8') as fh:
+            html = fh.read()
+    except Exception:
+        return ''
+
+    base = os.path.dirname(GUIDE_PATH)
+    for rel in sorted(set(re.findall(r'src="(guide-img/[^"]+)"', html))):
+        try:
+            with open(os.path.join(base, rel), 'rb') as fh:
+                raw = fh.read()
+        except Exception:
+            continue
+        mime = 'image/jpeg' if rel.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
+        html = html.replace(
+            f'src="{rel}"',
+            f'src="data:{mime};base64,{base64.b64encode(raw).decode()}"')
+    return html
+
+
 def build_feature_cheatsheet(corpus: list, max_examples: int = 3,
                              progress=None) -> list:
     """
@@ -4429,6 +4469,21 @@ if corpus and not st.session_state.get('_preload_started'):
     _preload_thread.start()
 
 with st.sidebar:
+    # ── User guide ────────────────────────────────────────────────────────────
+    _guide = load_guide_html()
+    if _guide:
+        if st.button("📖  מדריך שימוש", key="guide_open",
+                     help="Open the illustrated guide inside the app"):
+            st.session_state['_show_guide'] = True
+            st.rerun()
+        st.download_button(
+            "⬇  Download the guide", _guide.encode('utf-8'),
+            file_name="PAI-guide.html", mime="text/html", key="guide_dl",
+            help="A single self-contained file — the screenshots travel with it",
+        )
+    else:
+        st.caption("📖 GUIDE.html not found next to app.py")
+
     # ── Feature cheat sheet ───────────────────────────────────────────────────
     with st.expander("📋  Feature cheat sheet"):
         st.caption(
@@ -4610,6 +4665,26 @@ with st.sidebar:
 # ════════════════════════════════════════════════════════════════════════════════
 #  UI
 # ════════════════════════════════════════════════════════════════════════════════
+
+# ── User guide overlay ────────────────────────────────────────────────────────
+# Rendered in the main column rather than the sidebar, which is far too narrow
+# for a 12-tab document. Everything below is skipped while it is open so the
+# guide is not competing with a page of results.
+if st.session_state.get('_show_guide'):
+    _gcol1, _gcol2 = st.columns([5, 1])
+    with _gcol1:
+        st.markdown("### 📖 מדריך שימוש")
+    with _gcol2:
+        if st.button("✕ Close", key="guide_close", type="primary"):
+            st.session_state.pop('_show_guide', None)
+            st.rerun()
+    _g = load_guide_html()
+    if _g:
+        components.html(_g, height=900, scrolling=True)
+    else:
+        st.error("GUIDE.html was not found next to app.py.")
+    st.stop()
+
 
 st.markdown("""
 <div class="pai-header">
